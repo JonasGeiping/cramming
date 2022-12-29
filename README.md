@@ -3,7 +3,7 @@
 This repository contains code to replicate our research described in "Cramming: Training a Language Model on a Single GPU in One Day". We experiment with language model pretraining a BERT-type model with limited compute, wondering "how bad can it really be"?
 
 
-You can find our paper here: https://arxiv.org/abs/2212.14034 and the abstract below:
+You can find our paper here: https://arxiv.org/abs/2212.14034, and the abstract below:
 
 > Recent trends in language modeling have focused on increasing performance through scaling, and have resulted in an environment where training language models is out of reach for most researchers and practitioners.  While most in the community are asking how to push the limits of extreme computation, we ask the opposite question:  
 How far can we get with a single GPU in just one day?
@@ -34,7 +34,7 @@ Setting:
 * [OPTIONAL] For The-Pile data, install `zstandard`
 
 ## Installation
-* Just clone for now, and install packages as described.s
+* Just clone for now, and install packages as described
 * [Optional] Follow the instructions at https://pre-commit.com/ to install the pre-commit hooks.
 * [Optional] For deduplication, first install rust `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh `, then
 `git clone https://github.com/google-research/deduplicate-text-datasets/tree/dev-v1` and then run `cargo install --target-dir ../cramming/dedup`
@@ -45,8 +45,6 @@ Setting:
 To replicate the final recipe discussed in the paper, run
 ```
 python pretrain.py name=amp_b4096_c5_o3_final arch=bert-c5 train=bert-o3 train.batch_size=4096 data=c4-subset-processed
-
-
 ```
 to pretrain and
 ```
