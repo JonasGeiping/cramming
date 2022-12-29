@@ -25,7 +25,7 @@ Setting:
 
 ## Requirements:
 * PyTorch: `torch`
-* huggingface: `transformers`, `tokenizers`, `datasets`
+* Hugging Face: `transformers`, `tokenizers`, `datasets`
 * `hydra-core`
 * [OPTIONAL]`deepspeed`
 * [OPTIONAL] `flash-attention`
@@ -63,7 +63,7 @@ Multi-GPU:
 torchrun --nproc_per_node=4 --standalone pretrain.py name=bert4gpu  data=bookcorpus-wikipedia arch=bert-original train=bert-original
 ```
 
-Eval a huggingface checkpoint:
+Eval a Hugging Face checkpoint:
 ```
 python eval.py dryrun=True eval=rte name=bert-finetuning eval.checkpoint=hf://bert-base-uncased
 ```
