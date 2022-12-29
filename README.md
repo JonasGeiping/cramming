@@ -3,7 +3,7 @@
 This repository contains code to replicate our research described in "Cramming: Training a Language Model on a Single GPU in One Day". We experiment with language model pretraining a BERT-type model with limited compute, wondering "how bad can it really be"?
 
 
-You can find our abstract below:
+You can find our paper here: https://arxiv.org/abs/2212.14034 and the abstract below:
 
 > Recent trends in language modeling have focused on increasing performance through scaling, and have resulted in an environment where training language models is out of reach for most researchers and practitioners.  While most in the community are asking how to push the limits of extreme computation, we ask the opposite question:  
 How far can we get with a single GPU in just one day?
