@@ -1,0 +1,10 @@
+# For sanity testing
+ag_news:
+  provider: huggingface
+  partition: default
+  split: train
+
+  streaming: False
+
+  remove_columns: label
+  concatenate_successive_entries: 0

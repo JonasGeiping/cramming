@@ -1,0 +1,7 @@
+type: SGD
+
+lr: 0.0005
+momentum: 0.9
+dampening: 0.0
+weight_decay: 0.01
+nesterov: True

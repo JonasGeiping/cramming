@@ -1,0 +1,35 @@
+# Just a bunch of fake data ...
+name: sanity-check-1
+defaults:
+  - sources:
+      - fake
+
+#
+# Preprocessing
+normalizer: # This is ignored and the default bert normalizer is used instead
+  force_lowercase:
+  strip_accents:
+  force_english_keyboard:
+  whitespace_escape:
+tokenizer: bert-base-uncased
+vocab_size: 30522
+
+# Dataset Formation
+seq_length: 128
+include_cls_token_in_corpus:
+include_sep_token_in_corpus:
+use_type_ids:
+max_entries_in_raw_dataset: 1e12 # Select only this many examples from the dataset
+max_seq_in_tokenized_dataset: 1e12 # Select only this many tokenized sequences.
+# max_seq_in_tokenized_dataset should be just slightly more than budget * 60 * 60 * expected tokens/sec for the single epoch of training
+
+# Data Cleaning:
+named_entity_simplification: False
+remove_whitespaces: False
+remove_trash: False
+trash_cutoff: 0.3
+deduplicate_entries: False
+deduplication_threshold: 100
+
+# Data Order:
+ordering: randomized # could be a curriculum

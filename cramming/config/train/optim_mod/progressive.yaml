@@ -1,0 +1,9 @@
+name: progressive-batching
+
+progress_rule: norm-based
+
+monotone: False
+theta: 0.9
+
+min_sample_guard: 2
+max_sample_guard: 128

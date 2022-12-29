@@ -1,0 +1,43 @@
+type: Shampoo
+
+lr: 0.0005
+betas:
+  - 0.9
+  - 0.98
+epsilon: 1e-12
+use_bias_correction: True
+adam_w_mode: True
+weight_decay: 0.01
+grafting_type: 4
+grafting_epsilon: 1e-08
+grafting_beta2: 0.999
+
+root_inv_dist: False
+# update_freq (int): frequency for updating inverse preconditioner (Default: 100)
+# init_delay (int): initial delay before starting to compute root inverse (Default: 1000)
+# threshold (int): threshold for switching to diagonal preconditioner (Default: 1024)
+# preconditioner_dtype (torch.dtype): data type for preconditioner (Default: torch.float)
+# large_dim_method (LargeDimMethod): method for handling large scale tensors. (Default: LargeDimMethod.BLOCKING)
+# root_inv_dist (bool): distributes root inverse computation across multiple GPU workers (Default: True)
+# use_merge_dims (bool): merge dimensions if possible while respecting threshold. (Default: True)
+# grafting_type (GraftingType): Selects grafting method. (Default: GraftingType.ADAGRAD)
+# grafting_epsilon (float): Epsilon for grafting method. (Default: 1e-3)
+# grafting_beta2 (float): Exponential moving average factor for grafting method. (Default: 1.0)
+
+# class PreconditionerType(enum.Enum):
+#     FULL = 0
+#     DIAGONAL = 1
+#
+#
+# class GraftingType(enum.Enum):
+#     NONE = 0
+#     SGD = 1
+#     ADAGRAD = 2
+#     RMSPROP = 3
+#     ADAM = 4
+#
+#
+# class LargeDimMethod(enum.Enum):
+#     DIAGONAL = 0
+#     ADAGRAD = 1
+#     BLOCKING = 2

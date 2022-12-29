@@ -1,0 +1,9 @@
+type: AdaHessian
+
+lr: 0.15
+betas:
+  - 0.9
+  - 0.98
+eps: 1e-6
+weight_decay: 0.01
+hessian_power: 1.0

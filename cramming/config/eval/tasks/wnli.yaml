@@ -1,0 +1,5 @@
+# dataset-specific settings
+wnli:
+  collection: glue
+  regression: False
+  structure: [sentence1, sentence2]

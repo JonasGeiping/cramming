@@ -1,0 +1,7 @@
+# added by check-manifest
+include *.py
+include *.yaml
+recursive-include cramming *.md
+recursive-include cramming *.yaml
+global-exclude *.pyc
+global-exclude __pycache__

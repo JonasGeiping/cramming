@@ -1,0 +1,3 @@
+# This configuration caches the dataset in RAM
+name: RAM
+draw_cache_directly: False

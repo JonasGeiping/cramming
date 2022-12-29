@@ -1,0 +1,28 @@
+# Configuration defaults
+# Settings are separated into hyperparameters for architecture, data, implementation and train/eval hyperparams
+# default settings run a sanity check with a small model and test data.
+defaults:
+  - arch: hf-bert-tiny
+  - data: sanity-check-2 #bookcorpus-wikipedia
+  - impl: torch-default
+  - wandb: none
+  - train: bert-base
+  - _self_
+  - override hydra/job_logging: custom
+
+base_dir: outputs
+hydra:
+  sweep:
+    dir: ${base_dir}/${name}/pretrain/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  run:
+    dir: ${base_dir}/${name}/pretrain/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  job:
+    chdir: True
+
+seed: # Optional: Set initial seed
+name: default # A name for this run [will be used for the summary table and outputs folder]
+
+# Total and central computation budget in hours:
+budget: 24
+# debug implementation by running every loop just once:
+dryrun: False

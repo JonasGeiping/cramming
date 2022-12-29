@@ -1,0 +1,29 @@
+# Configuration defaults
+# Settings are separated into hyperparameters for architecture, data, implementation and train/eval hyperparams
+defaults:
+  - impl: torch-default
+  - wandb: none
+  - eval: rte
+  - _self_
+  - override hydra/job_logging: custom
+
+wandb:
+  project: cramming-eval
+
+base_dir: outputs
+hydra:
+  sweep:
+    dir: ${base_dir}/${name}/downstream/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  run:
+    dir: ${base_dir}/${name}/downstream/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  job:
+    chdir: True
+
+seed: # Optional: Set initial seed
+
+# A name for this run [will draw the checkpoint from runs with this name
+# and use this name for the summary table and outputs folder]
+name: default
+
+# debug implementation by running every loop just once:
+dryrun: False

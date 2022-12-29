@@ -1,0 +1,5 @@
+# dataset-specific settings
+qqp:
+  collection: glue
+  regression: False
+  structure: [question1, question2]

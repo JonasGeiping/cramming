@@ -1,0 +1,22 @@
+# singl(ish) GPU, sane pytorch stuff
+name: torch-default
+defaults:
+  - _default
+  - _self_
+
+mixed_precision: True # turns on AMP on GPUs/Intel devices. The default precision needs to be float
+grad_scaling: True # Only activates when mixed_precision=True
+mixed_precision_target_dtype: float16
+
+# Distributed training:
+zero_redundancy_optimizer: False # requires limited_decay_keys=[] for pytorch<=1.10.2
+broadcast_buffers: False
+bucket_cap_mb: 25
+gradient_as_bucket_view: True
+static_graph: True
+
+# Misc:
+foreach_optimizer: False
+
+# Dynamo
+optimizer_context: # can be: aot_autograd_speedup, nvfuser_global, aot_nvfuser

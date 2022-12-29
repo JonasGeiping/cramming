@@ -1,0 +1,38 @@
+# Basic hyperparameter for normal BERT pretraining
+# working hard here to separate "impl" implementation details and "train" abstract hyperparameters
+
+name: bert-original
+
+defaults:
+  - optim: adam_classic
+  - optim_mod: disabled
+
+optim:
+  lr: 1e-4
+
+limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight] # no weight decay for these layers
+
+# steps:
+warmup_steps: 80_000 # These are microbatch steps
+steps: 8_000_000 # These are microbatch steps at bs=64. The original 1mio steps for BERT are recovered with 512/64=8
+scheduler: polynomial-decay
+
+# Training settting:
+batch_size: 512
+batch_size_ramp: 0
+
+gradient_clipping:
+pretrain_in_train_mode: True # default BERT trains with dropout layers
+
+objective:
+  name: masked-lm
+  mlm_probability: 0.15
+  use_80_20_rule: True
+  disable_mlm: False
+  token_drop: 0.0
+reverse_dataset_order: False
+
+budget: ${budget}
+
+gradinit:
+  enabled: False

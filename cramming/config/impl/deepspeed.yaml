@@ -1,0 +1,134 @@
+# This configuration is a subset of the deepspeed hyperparameters.
+name: deepspeed
+defaults:
+  - _default
+  - _self_
+
+# Dynamo
+optimizer_context: # can be: aot_autograd_speedup, nvfuser_global, aot_nvfuser
+
+train_batch_size: ${train.batch_size} # can be "auto"
+train_micro_batch_size_per_gpu: 128 # can be "auto"
+
+optimizer: ${train.optim}
+gradient_clipping: 100
+# DeepSpeed natively supports Adam, AdamW, OneBitAdam, Lamb,
+# and OneBitLamb optimizers (See here for details) and will import other optimizers from torch.
+
+# This scheduler is not quite the same as the schedulers called via huggingface. YMMV
+scheduler:
+  type: WarmupDecayLR
+  params:
+    warmup_min_lr: 0
+    warmup_max_lr: ${train.optim.lr}
+    warmup_num_steps: ${train.warmup_steps}
+    warmup_type: linear
+    total_num_steps: ${train.steps}
+
+# communication_data_type: # this should be good in the default setting
+# prescale_gradients: False # this should be good in the default setting
+# gradient_predivide_factor: 1.0
+
+# Do not combine these with AMP:
+fp16:
+  enabled: False # can be "auto"
+  loss_scale: 0
+  initial_scale_power: 32
+  loss_scale_window: 1000
+  hysteresis: 2
+  min_loss_scale: 1
+
+# Do not combine this with fp16 or zero:
+# bf16:
+#   enabled: False
+# amp:
+#   enabled: False
+#   opt_level: O1
+#   # can draw more args from https://nvidia.github.io/apex/amp.html#apex.amp.initialize
+#
+
+zero_optimization:
+  # stage 0, 1, 2, and 3 refer to
+  # 0) disabled
+  # 1) optimizer state partitioning
+  # 2) optimizer+gradient state partitioning
+  # 3) optimizer+gradient+parameter partitioning
+  stage: 0 # [0|1|2|3]
+  allgather_partitions: True # [true|false] # Chooses between allgather collective or a series of broadcast collectives to gather updated parameters from all the GPUs at the end of each step
+  allgather_bucket_size: 5e8
+  overlap_comm: False # Attempts to overlap the reduction of the gradients with backward computation
+  reduce_scatter: True # Uses reduce or reduce scatter instead of allreduce to average gradients
+  reduce_bucket_size: 5e8 # Number of elements reduced/allreduced at a time. Limits the memory required for the allgather for large model sizes
+  contiguous_gradients: True # Copies the gradients to a contiguous buffer as they are produced. Avoids memory fragmentation during backward pass.
+  grad_hooks: True
+
+  # huggingface default is 2e8 for both reduce and all_grather buckets
+  # both reduce and all_grather buckets can also be can be "auto"
+
+  # Stage 2 optimization for CPU offloading that parallelizes gradient copying to CPU memory among ranks by fine-grained gradient partitioning.
+  # Performance benefit grows with gradient accumulation steps (more copying between optimizer steps) or GPU count (increased parallelism)
+  round_robin_gradients: False # [true|false]
+
+  # Enabling and configuring ZeRO optimization of parameter offloading to CPU/NVMe. Available only with ZeRO stage 3.
+  offload_param:
+    device: cpu
+    # nvme_path: /nvme
+    pin_memory: True
+    buffer_count: 5
+    buffer_size: 1e8
+    max_in_cpu: 1e9
+
+  # Enable offloading of optimizer state to CPU or NVMe, and optimizer computation to CPU.
+  #  This frees up GPU memory for larger models or batch sizes. Valid only with stage 2 and
+  # Only include these options if stage=2 or higher:
+  # offload_optimizer:
+  #   device: cpu
+  #   # nvme_path: /nvme
+  #   pin_memory: True
+  #   buffer_count:
+  #     4 # Number of buffers in buffer pool for optimizer state offloading to NVMe. This should be at least the number of states maintained per parameter by the optimizer.
+  #     # For example, Adam optimizer has 4 states (parameter, gradient, momentum, and variance).
+  #   buffer_size: 1e8
+  #   fast_init: False # Enable fast optimizer initialization when offloading to NVMe.
+
+  stage3_max_live_parameters: 1e9 # The maximum number of parameters resident per GPU before releasing. Smaller values use less memory, but perform more communication.
+  stage3_max_reuse_distance: 1e9 # Do not release a parameter if it will be reused within this threshold of parameters. Smaller values use less memory, but perform more communication.
+  stage3_prefetch_bucket_size: 5e8 # can be "auto" # The size of the fixed buffer for prefetching parameters. Smaller values use less memory, but can increase stalls due to communication.
+  stage3_param_persistence_threshold: 1e6 # can be "auto" # Do not partition parameters smaller than this threshold. Smaller values use less memory, but can greatly increase communication (especially latency-bound messages).
+
+  sub_group_size: 1e12
+  elastic_checkpoint: True # [true|false]
+  stage3_gather_16bit_weights_on_model_save: False # [true|false]
+  ignore_unused_parameters: False # [true|false]
+
+  # aio:
+  #  block_size: 1048576
+  #  queue_depth: 8
+  #  thread_count: 1
+  #  single_submit: False
+  #  overlap_events: True
+
+steps_per_print: ${impl.print_loss_every_nth_step}
+wall_clock_breakdown: False
+dump_state: False
+
+flops_profiler:
+  enabled: False
+  profile_step: 1
+  module_depth: -1
+  top_modules: 1
+  detailed: True
+  output_file: #  If None, the profiler prints to stdout..
+
+# activation_checkpointing:
+#   partition_activations: False
+#   cpu_checkpointing: False
+#   contiguous_memory_optimization: False
+#   number_checkpoints:
+#   synchronize_checkpoint_boundary: False
+#   profile: False
+
+tensorboard:
+  enabled: False
+  output_path: tensorboard_logs
+  job_name: ${name}

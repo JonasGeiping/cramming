@@ -1,0 +1,50 @@
+# On the Stability of Fine-tuning BERT: Misconceptions, Explanations, and Strong Baselines
+
+defaults:
+  - optim: adam
+  - tasks:
+      - cola
+      - mnli
+      - mrpc
+      - qnli
+      - qqp
+      - rte
+      - sst2
+      - stsb
+#      - wnli
+
+optim:
+  weight_decay: 0.01
+  betas:
+    - 0.9
+    - 0.999
+
+evaluation_set: validation # always keep this at validation except for the final run
+
+# checkpoint name:
+# This can be either "latest", or a reference to a specific checkpoint in a subfolder
+checkpoint: latest
+path: ${impl.path} # Path for caches of datasets and tokenizers
+max_seq_length: 128
+
+# Default options:
+# These can be overwritten by specific tasks
+batch_size: 16
+batch_size_ramp: 0
+
+gradient_clipping:
+limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight] # no weight decay for these layers
+scheduler: linear
+optim_mod:
+  name: none
+
+epochs: 20
+
+# These options are only used for scheduling:
+warmup_steps: 0.1
+steps: 10_000
+
+testing:
+  batch_size: 128
+
+arch_modifications:

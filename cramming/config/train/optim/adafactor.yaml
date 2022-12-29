@@ -1,0 +1,13 @@
+type: Adafactor
+
+lr: 0.001
+eps:
+  - 1e-30
+  - 0.001
+clip_threshold: 1.0
+decay_rate: -0.8
+beta1:
+weight_decay: 0.0
+scale_parameter: False
+relative_step: False
+warmup_init: False

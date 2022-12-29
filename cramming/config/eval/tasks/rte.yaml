@@ -1,0 +1,5 @@
+# dataset-specific settings
+rte:
+  collection: glue
+  regression: False
+  structure: [sentence1, sentence2]

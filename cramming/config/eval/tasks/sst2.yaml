@@ -1,0 +1,5 @@
+# dataset-specific settings
+sst2:
+  collection: glue
+  regression: False
+  structure: [sentence, null]

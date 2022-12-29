@@ -1,0 +1,11 @@
+# The bookcorpus dataset, drawn from it huggingface mirror
+bookcorpus:
+  provider: huggingface
+  partition: plain_text
+  split: train
+
+  streaming: False
+
+  # source-specific cleaning rules?
+  remove_columns:
+  concatenate_successive_entries: 16

@@ -1,0 +1,5 @@
+name: LARC
+
+trust_coefficient: 0.02
+clip: True
+eps: 1e-8

@@ -1,0 +1,42 @@
+defaults:
+  - optim: adam
+  - tasks:
+      - cola
+      - mnli
+      - mrpc
+      - qnli
+      - qqp
+      - rte
+      - sst2
+      - stsb
+#      - wnli
+
+evaluation_set: validation # always keep this at validation except for the final run
+
+# checkpoint name:
+# This can be either "latest", or a reference to a specific checkpoint in a subfolder
+checkpoint: latest
+path: ${impl.path} # Path for caches of datasets and tokenizers
+max_seq_length: 128
+
+# Default options:
+# These can be overwritten by specific tasks
+batch_size: 32
+batch_size_ramp: 0
+
+gradient_clipping:
+limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight] # no weight decay for these layers
+scheduler:
+optim_mod:
+  name: none
+
+epochs: 5
+
+# These options are only used for scheduling:
+warmup_steps: 1000
+steps: 10_000
+
+testing:
+  batch_size: 128
+
+arch_modifications:

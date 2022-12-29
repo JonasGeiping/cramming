@@ -1,0 +1,11 @@
+# The wikipedia en dataset, drawn from it huggingface mirror
+c4:
+  provider: huggingface
+  partition: en
+  split: train
+
+  streaming: True
+
+  # source-specific cleaning rules?
+  remove_columns:
+  concatenate_successive_entries: 0
