@@ -113,6 +113,9 @@ def system_startup(cfg):
             f"No GPU allocated to this process on {socket.gethostname()} with name {cfg.name}. Running in CPU-mode is likely an error."
         )
 
+    # Force thread reduction for all cases:
+    torch.set_num_threads(min(torch.get_num_threads(), cfg.impl.threads))
+
     # Distributed launch?
     if "LOCAL_RANK" in os.environ:
         threads_per_gpu = min(torch.get_num_threads() // max(1, torch.cuda.device_count()), cfg.impl.threads)
