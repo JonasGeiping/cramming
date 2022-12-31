@@ -40,6 +40,34 @@ Setting:
 `git clone https://github.com/google-research/deduplicate-text-datasets/tree/dev-v1` and then run `cargo install --target-dir ../cramming/dedup`
 * [Optional] For FlashAttention, install package as instructed at https://github.com/HazyResearch/flash-attention
 
+
+## General Usage
+
+Use the `pretrain.py` script to pretrain with limited compute. This repository uses hydra (https://hydra.cc/docs/intro/), so all fields in `cramming/config` can be modified on the command line. For example, the `budget` can be modified by providing `budget=48` as additional argument, or the learning rate can be modified via `train.optim.lr=1e-4`. Check out the configuration folder to see all arguments.
+
+Your first step should be to verify the installed packages. To do so, you can run `python pretrain.py dryrun=True`, which will run the default sanity check for a single iteration. From there, you can enable additional functionality. For example, modify the architecture, e.g. `arch=bert-original` and training setup `train=bert-original`.
+To really train a language model, you need to switch away from the sanity check dataset to at least `data=bookcorpus-wikipedia`.
+
+### Data Handling
+The data sources from `data.sources` will be read, normalized and pretokenized before training starts and cached into a database. Subsequent calls with the same configuration will reused this database of tokenized sequences. By default, a new tokenizer will also be constructed and saved during this process. Important data options are `data.max_entries_in_raw_dataset`, which defines how much *raw* data will be loaded. For example, for a large data source such as C4, only a subset of raw data will be downloaded. Then, `max_seq_in_tokenized_dataset` bottlenecks how many *processed* sequences will be stored in the database. This number should be larger than the number of sequences expected to be read within the budget.
+
+Additional Notes:
+* A simple trick to run dataset preprocessing only is to run `python pretrain.py data=... dryrun=True`, which dry-runs the training, but runs the full data preprocessing. Later runs can then re-use the cached data.
+* Dataset preprocessing is heavily parallelized. This might be a problem for your RAM. If this happens, reduce `impl.threads`. Especially the deduplication code does require substantial amounts of RAM.
+* I would run first experiments with `bookcorpus-wikipedia` only, which preprocesses comparatively quickly and only then look into the full processed and filtered C4.
+
+
+### Evaluation
+
+To evaluate pretrained models on GLUE (or some GLUE tasks), use `eval.py`. This script searches for saved models in the base directory. Given the name of a previous run, this script will, by default, retrieve the latest checkpoint saved with this name, and then run evaluations.
+
+
+### WandB
+
+You can log runs to your weights&biases account. To do so, simply modify `wandb.entity` and `wandb.project` on the command line or at `cramming/config/wandb/default.yaml`.
+
+
+
 ## Replicate the final recipe
 
 To replicate the final recipe discussed in the paper, run
@@ -75,6 +103,19 @@ torchrun --nproc_per_node=4 --standalone  pretrain.py name=speedtest1 dryrun=Tru
 
 Additional examples for recipes can be found in the `/scripts` folder.
 
+
+# Todos:
+
+The following options are currently broken/limited/work-in-progress. Use these at your own discretion, or open a pull-request with a fix.
+
+* The-Pile needs to be downloaded in its entirety to be used, but the code could be updated to stream, just like C4.
+* Data Preprocessing is wasteful in terms of RAM.
+* Token Dropping is simplistic, a more involved version could be better.
+* Code currently uses the "old" `jit.script` fusion, should move toward new `torch.compile` implementation at some point. The current `inductor` hook is also non-functional.
+* Shampoo (see discussion at https://twitter.com/_arohan_/status/1608577721818546176?s=20)
+* Causal Attention [I broke this shortly before release, if you want to re-test CA, you'd have to fix it first]
+* LAWA
+
 # Contact
 
-Please, feel free to contact us with any questions, or open an issue on github.
+Please, feel free to contact us with any questions, or open an issue on Github.
