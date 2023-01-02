@@ -11,7 +11,7 @@ path: data
 defaults:
   - data_structure: from-disk # can be LMDB or RAM or None to load directly from disk
 local_staging_dir: # Optionally copy a preprocessed dataset into this folder before loading it for training
-forbid_dataset_preprocessing: True
+forbid_dataset_preprocessing: False
 temporary_corpus: False # Save data directly into local staging dir, forget after use
 max_raw_chunk_size: 1e14
 
