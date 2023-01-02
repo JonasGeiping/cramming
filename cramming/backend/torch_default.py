@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Basic training backend for normal pytorch training."""
 import torch
 

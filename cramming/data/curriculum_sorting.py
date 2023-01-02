@@ -68,26 +68,26 @@ def _sort_tokenized_dataset_by_token(tokenized_dataset, tokenizer, target_token_
 
     dataset_counts = tokenized_dataset.map(
         count_token,
-        desc=f"Counting occurences of token {tokenizer.decode(target_token_id)}",
+        desc=f"Counting occurrences of token {tokenizer.decode(target_token_id)}",
         remove_columns=tokenized_dataset.column_names,
         **map_setup,
     )
 
     new_order = np.argsort(np.asarray(dataset_counts["counts"]))[::-1]
 
-    # Print sentence with most occurences:
+    # Print sentence with most occurrences:
     sentence_idx = int(new_order[0])
     input_data = torch.as_tensor(tokenized_dataset[sentence_idx]["input_ids"]).squeeze()  # squeeze because hf has leading dim
     dataset_size = len(tokenized_dataset)
 
-    log.info("Sentence with most occurences of token ...")
+    log.info("Sentence with most occurrences of token ...")
     log.info(tokenizer.batch_decode(input_data[None])[0])
 
     sentence_idx = int(new_order[-1])
     input_data = torch.as_tensor(tokenized_dataset[sentence_idx]["input_ids"]).squeeze()  # squeeze because hf has leading dim
     dataset_size = len(tokenized_dataset)
 
-    log.info("Sentence with least occurences of token ...")
+    log.info("Sentence with least occurrences of token ...")
     log.info(tokenizer.batch_decode(input_data[None])[0])
 
     return tokenized_dataset.select(indices=new_order, writer_batch_size=1024)
