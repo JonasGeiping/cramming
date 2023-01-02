@@ -58,7 +58,7 @@ class CachedDataset(torch.utils.data.Dataset):
             pointer += batch_length
 
         self.cache = self.cache.contiguous()
-        log.info(f'Dataset sucessfully cached into {"RAM" if target_device == torch.device("cpu") else "SDRAM"}.')
+        log.info(f'Dataset successfully cached into {"RAM" if target_device == torch.device("cpu") else "SDRAM"}.')
 
     def __getitem__(self, index):
         """Get sample, target from cache."""
