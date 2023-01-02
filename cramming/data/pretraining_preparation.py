@@ -9,6 +9,7 @@ import contextlib
 import logging
 import tempfile
 from itertools import chain
+from collections import defaultdict
 
 import json
 from omegaconf import OmegaConf
@@ -59,6 +60,7 @@ def load_pretraining_corpus(cfg_data, cfg_impl):
                     cfg_data,
                     download_path=cfg_impl.path,
                     num_threads=num_threads,
+                    max_raw_chunk_size=cfg_impl.max_raw_chunk_size,
                 )
 
                 def save_corpus(path):
@@ -111,7 +113,7 @@ def load_pretraining_corpus(cfg_data, cfg_impl):
     return tokenized_dataset, tokenizer
 
 
-def preprocess_dataset(cfg_data, download_path, num_threads=1):
+def preprocess_dataset(cfg_data, download_path, num_threads=1, max_raw_chunk_size=1e14):
     """A lot of loading and preprocessing."""
     # 1) Collect raw source datasets
     raw_datasets = []
@@ -155,12 +157,7 @@ def preprocess_dataset(cfg_data, download_path, num_threads=1):
         # Streaming datasets:
         raw_data = datasets.interleave_datasets(raw_datasets)
         raw_data = raw_data.take(int(cfg_data.max_entries_in_raw_dataset))
-        # I'm tired of IterableDatasets and will take the performance hit to write them out instead:
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            datasets.Dataset.from_dict(dict(text=[v["text"] for v in raw_data])).save_to_disk(tmpdirname + "raw_data")
-            raw_data = datasets.load_from_disk(tmpdirname + "raw_data")
-        # This used to be only a move into RAM but this breaks memory later using C4:
-        # raw_data = datasets.Dataset.from_dict(dict(text=[v["text"] for v in raw_data]))
+        raw_data = _move_stream_to_fixed_map(raw_data, cfg_data.max_entries_in_raw_dataset, max_raw_chunk_size)
 
     raw_data = raw_data.shuffle(seed=89)  # Shuffle once here so that multiproc has shards of similar size!
     # This shuffle is crucial for fast multiprocessing tokenization
@@ -170,6 +167,31 @@ def preprocess_dataset(cfg_data, download_path, num_threads=1):
     tokenized_dataset = _huggingface_preprocessing(raw_data, tokenizer, cfg_data, num_threads=num_threads)
 
     return tokenized_dataset, tokenizer
+
+
+def _move_stream_to_fixed_map(raw_data_streamed, max_entries_in_raw_dataset, max_raw_chunk_size=1e14):
+    """Save streaming dataset to a fixed mapping-style database."""
+    # I'm tired of IterableDatasets and will take the performance hit to write them out instead:
+    if max_raw_chunk_size > max_entries_in_raw_dataset:
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            datasets.Dataset.from_dict(dict(text=[v["text"] for v in raw_data_streamed])).save_to_disk(tmpdirname + "raw_data")
+            raw_data_mapped = datasets.load_from_disk(tmpdirname + "raw_data")
+        # This used to be only a move into RAM but this breaks memory later using C4:
+        # raw_data = datasets.Dataset.from_dict(dict(text=[v["text"] for v in raw_data]))
+        return raw_data_mapped
+    else:
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            mapped_sets = []
+            data_in_RAM = defaultdict(list)
+            for idx, value_stream in enumerate(raw_data_streamed):
+                data_in_RAM["text"].append(value_stream["text"])
+                if ((idx + 1) % max_raw_chunk_size == 0) or ((idx - 1) == max_entries_in_raw_dataset):
+                    datasets.Dataset.from_dict(data_in_RAM).save_to_disk(tmpdirname + "raw_data" + str(idx))
+                    mapped_dataset = datasets.load_from_disk(tmpdirname + "raw_data" + str(idx))
+                    log.info(f"Saved temporary copy at idx {idx} of {max_entries_in_raw_dataset} at {tmpdirname + 'raw_data' + str(idx)}.")
+                    data_in_RAM["text"] = []
+                    mapped_sets.append(mapped_dataset)
+        return datasets.concatenate_datasets(mapped_sets)
 
 
 def _huggingface_preprocessing(raw_dataset, tokenizer, cfg_data, num_threads=4):
