@@ -16,8 +16,9 @@ limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight] # no weight decay f
 
 # steps:
 warmup_steps: 0
+cooldown_steps: 0
 steps: 600000 # these are microbatch steps
-scheduler: triangle2
+scheduler: budget-triangle2
 
 # Training settting:
 batch_size: 1536

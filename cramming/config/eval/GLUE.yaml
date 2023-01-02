@@ -34,6 +34,7 @@ epochs: 5
 
 # These options are only used for scheduling:
 warmup_steps: 1000
+cooldown_steps: 0
 steps: 10_000
 
 testing:

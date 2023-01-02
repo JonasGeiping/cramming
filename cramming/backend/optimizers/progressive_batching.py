@@ -1,5 +1,5 @@
 """Implementation of a progressive batching meta optimizer.
-The optimizer may defer an optimization until gradient variance is small enough
+The optimizer may defer an optimization step until gradient variance is small enough
 """
 
 import torch

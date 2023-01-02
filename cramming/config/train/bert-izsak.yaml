@@ -19,6 +19,7 @@ optim:
 
 # steps:
 warmup_steps: 0.06 # in percentage points
+cooldown_steps: 0
 steps: 600_000 # these are microbatch steps
 scheduler: budget-linear
 

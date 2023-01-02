@@ -14,6 +14,7 @@ limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight] # no weight decay f
 
 # steps:
 warmup_steps: 80_000 # These are microbatch steps
+cooldown_steps: 0
 steps: 8_000_000 # These are microbatch steps at bs=64. The original 1mio steps for BERT are recovered with 512/64=8
 scheduler: polynomial-decay
 
