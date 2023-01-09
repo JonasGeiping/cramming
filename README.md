@@ -57,6 +57,17 @@ Additional Notes:
 * I would run first experiments with `bookcorpus-wikipedia` only, which preprocesses comparatively quickly and only then look into the full processed and filtered C4.
 
 
+#### Preprocessed Datasets
+
+For reference and if you are only interested in changing training/architecture, you can find some preprocessed datasets here:
+
+https://www.dropbox.com/sh/sy8wanplx5typ9k/AAAWUceTcvZIh1GFX4Ij7_xXa?dl=0.
+
+You will not need to download all of these. `c4-subset_WordPiecex32768_e0501aeb87699de7500dc91a54939f44` here is the final processed dataset for `data=c4-subset-processed` and `bookcorpus-wikitext_WordPiecex32768_a295a1f5b033756b08d2dbca690655a7` is the default `bookcorpus-wikipedia` dataset. Each folder contains a file called `model_config.json` that describes the preprocessing. You need to move these datasets into the `data` folder of your base output directory (so, `cramming/outputs/data` with default settings). The preprocessed data will be read and the preprocessing step skipped entirely, if the data is placed in the right folder.
+
+Preprocessed data is convenient to work with, and I do think modifications to data processing and filtering continue to be under-explored compared to training and architecture because of this. There might be more gains to be had with better data, than with other tweaks, so ultimately you might want to consider setting up the code and environment for the full data processing pipeline to work.
+
+
 ### Evaluation
 
 To evaluate pretrained models on GLUE (or some GLUE tasks), use `eval.py`. This script searches for saved models in the base directory. Given the name of a previous run, this script will, by default, retrieve the latest checkpoint saved with this name, and then run evaluations.
@@ -106,7 +117,7 @@ Additional examples for recipes can be found in the `/scripts` folder.
 
 # Todos:
 
-The following options are currently broken/limited/work-in-progress. Use these at your own discretion, or open a pull-request with a fix.
+The following options are currently broken/limited/work-in-progress. Use these at your own discretion. Of course, any contributions here are highly appreciated. You can also message me with more questions about any of these points, if you want to look into them.
 
 * The-Pile needs to be downloaded in its entirety to be used, but the code could be updated to stream, just like C4.
 * Data Preprocessing is wasteful in terms of RAM.
