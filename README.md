@@ -24,7 +24,7 @@ Setting:
 # How to run the code
 
 ## Requirements:
-* PyTorch: `torch`
+* PyTorch: `torch` (at least version 1.12)
 * huggingface: `transformers`, `tokenizers`, `datasets`
 * `hydra-core`
 * [OPTIONAL]`deepspeed`
@@ -34,11 +34,17 @@ Setting:
 * [OPTIONAL] For The-Pile data, install `zstandard`
 
 ## Installation
-* Just clone for now, and install packages as described
-* [Optional] Follow the instructions at https://pre-commit.com/ to install the pre-commit hooks.
-* [Optional] For deduplication, first install rust `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh `, then
+* Just clone for now, and install packages as described. Inside the cloned directory, you can use `pip install .` to install all packages and scripts.
+* [Optional] For deduplication (necessary for the final dataset recipe), first install rust `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh `, then
 `git clone https://github.com/google-research/deduplicate-text-datasets/tree/dev-v1` and then run `cargo install --target-dir ../cramming/dedup`
-* [Optional] For FlashAttention, install package as instructed at https://github.com/HazyResearch/flash-attention
+* [Optional] For FlashAttention (necessary for the `c5` recipe), install package as instructed at https://github.com/HazyResearch/flash-attention
+* [Optional] Follow the instructions at https://pre-commit.com/ to install the pre-commit hooks (necessary only if you want to contribute to this project).
+
+To verify a minimal installation, you can run
+```
+python pretrain.py name=test arch=bert-base train=bert-base data=sanity-check-2 dryrun=True impl.microbatch_size=2
+```
+This command pre-processes a small sanity-check dataset, and runs a single training step.
 
 
 ## General Usage
