@@ -52,7 +52,10 @@ def load_pretraining_corpus(cfg_data, cfg_impl):
             )
         except FileNotFoundError:
             if cfg_impl.forbid_dataset_preprocessing:
-                raise ValueError(f"Cannot find processed at path {data_path}. Dataset preprocessing disabled.")
+                raise ValueError(
+                    f"Cannot find processed at path {data_path}. Dataset preprocessing disabled. "
+                    "Dataset preprocessing can be enabled with 'impl.forbid_dataset_preprocessing=False'."
+                )
             # Run preprocessing to create dataset
             with main_process_first():
                 num_threads = min(torch.get_num_threads(), cfg_impl.threads)  # Mitigate worker overloading
