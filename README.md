@@ -74,6 +74,10 @@ You will not need to download all of these. `c4-subset_WordPiecex32768_e0501aeb8
 Preprocessed data is convenient to work with, and I do think modifications to data processing and filtering continue to be under-explored compared to training and architecture because of this. There might be more gains to be had with better data, than with other tweaks, so ultimately you might want to consider setting up the code and environment for the full data processing pipeline to work.
 
 
+#### Model Checkpoint
+
+You can now find a checkpoint for `c5-o3` trained on `c4-subset-processed` at https://huggingface.co/JonasGeiping/crammed-bert.
+
 ### Evaluation
 
 To evaluate pretrained models on GLUE (or some GLUE tasks), use `eval.py`. This script searches for saved models in the base directory. Given the name of a previous run, this script will, by default, retrieve the latest checkpoint saved with this name, and then run evaluations.
