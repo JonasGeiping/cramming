@@ -64,6 +64,9 @@ sharing_strategy: file_descriptor
 enable_huggingface_offline_mode: False
 local_rank: # This is set automatically by the system_startup
 
+push_to_huggingface_hub: False
+hf_directoy_name: "test-crammedBERT-c5" # set a clever name here!
+
 # Other constants:
 # OMP_NUM_THREADS:[number_of_physical_cores]
 # OMP_SCHEDULE:  # STATIC

@@ -219,7 +219,11 @@ class PatchedDataCollatorForLanguageModeling(transformers.DataCollatorForLanguag
             out = None
             if torch.utils.data.get_worker_info() is not None:
                 storage = elem._storage()._new_shared(len(examples) * 8 * elem.shape[0], device=elem.device)  # 8 for byte->long
+                # storage = elem.untyped_storage()._new_shared(len(examples) * 8 * elem.shape[0], device=elem.device)  # 8 for byte->long
+                # out = elem.new(storage).resize_(len(examples), elem.shape[0])
+                # storage = elem._typed_storage()._new_shared(len(examples) * elem.shape[0], device=elem.device) # this will be pytorch 2.0
                 out = elem.new(storage).resize_(len(examples), elem.shape[0])
+
             batch[key] = torch.stack([example[key] for example in examples], 0, out=out).contiguous()
 
         # If special token mask has been preprocessed, pop it from the dict.

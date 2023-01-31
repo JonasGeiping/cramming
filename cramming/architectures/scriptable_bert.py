@@ -1,9 +1,13 @@
 """Rewrite a simplified BERT version based on the huggingface BERT but allow for scripting to all kinds of variations."""
 import torch
 
-# import torchdynamo  # need to disable dynamo in dynamic parts
 
 from typing import Optional
+from transformers import PretrainedConfig, PreTrainedModel
+
+from transformers import AutoConfig, AutoModel, AutoModelForMaskedLM, AutoModelForSequenceClassification
+from omegaconf import OmegaConf
+
 
 from .components import (
     _get_layer_fn,
@@ -20,46 +24,72 @@ def construct_scriptable_bert(cfg_arch, vocab_size, downstream_classes=None):
     """See the config file for details on what is possible."""
     cfg_arch.embedding.vocab_size = vocab_size
     cfg_arch.num_labels = downstream_classes
+
+    config = crammedBertConfig(OmegaConf.to_container(cfg_arch, resolve=True))
     if downstream_classes is None:
-        model = ScriptableLMForPreTraining(ScriptableLM(cfg_arch), cfg_arch)
+        model = ScriptableLMForPreTraining(config)
     else:
-        model = ScriptableLMForSequenceClassification(ScriptableLM(cfg_arch), cfg_arch)
+        model = ScriptableLMForSequenceClassification(config)
+
     return model
 
 
-class ScriptableLM(torch.nn.Module):
+class crammedBertConfig(PretrainedConfig):
+    model_type = "crammedBERT"
+
+    def __init__(self, cfg_arch_container: dict = {}, **kwargs):
+        self.arch = cfg_arch_container
+        super().__init__(**kwargs)
+
+
+class ScriptableLM(PreTrainedModel):
     """Definitely can represent BERT, but also a lot of other things. To be used for MLM schemes."""
 
-    def __init__(self, cfg_arch):
-        super().__init__()
-        self.cfg = cfg_arch
+    config_class = crammedBertConfig
 
-        self.embedding = EmbeddingComponent(cfg_arch.embedding, cfg_arch.norm, cfg_arch.norm_eps)
-        if cfg_arch.embedding.embedding_dim == cfg_arch.hidden_size:
+    def __init__(self, config):
+        super().__init__(config)
+        self.cfg = OmegaConf.create(config.arch)  # this could be nicer ...
+
+        self.embedding = EmbeddingComponent(self.cfg.embedding, self.cfg.norm, self.cfg.norm_eps)
+        if self.cfg.embedding.embedding_dim == self.cfg.hidden_size:
             self.input_projection = torch.nn.Identity()
         else:
             self.input_projection = torch.nn.Linear(
-                cfg_arch.embedding.embedding_dim,
-                cfg_arch.hidden_size,
-                bias=cfg_arch.use_bias,
+                self.cfg.embedding.embedding_dim,
+                self.cfg.hidden_size,
+                bias=self.cfg.use_bias,
             )
 
-        layer_fn = _get_layer_fn(cfg_arch.layer_macro_type)
-        if cfg_arch.recurrent_layers is None:
-            self.layers = torch.nn.ModuleList([layer_fn(idx, cfg_arch) for idx in range(cfg_arch.num_transformer_layers)])
+        layer_fn = _get_layer_fn(self.cfg.layer_macro_type)
+        if self.cfg.recurrent_layers is None:
+            self.layers = torch.nn.ModuleList([layer_fn(idx, self.cfg) for idx in range(self.cfg.num_transformer_layers)])
         else:
-            core_block = Sequential([layer_fn(idx, cfg_arch) for idx in range(cfg_arch.recurrent_layers)])
-            self.layers = torch.nn.ModuleList([core_block for _ in range(cfg_arch.num_transformer_layers)])
+            core_block = Sequential([layer_fn(idx, self.cfg) for idx in range(self.cfg.recurrent_layers)])
+            self.layers = torch.nn.ModuleList([core_block for _ in range(self.cfg.num_transformer_layers)])
 
         if self.cfg.final_norm:
-            self.final_norm = _get_norm_fn(cfg_arch.norm)(cfg_arch.hidden_size, eps=cfg_arch.norm_eps)
+            self.final_norm = _get_norm_fn(self.cfg.norm)(self.cfg.hidden_size, eps=self.cfg.norm_eps)
         else:
             self.final_norm = torch.nn.Identity()
 
         self.seq_first = self.layers[0].LAYOUT == "[S B H]" if len(self.layers) > 0 else False
-        self.gradient_checkpointing = cfg_arch.gradient_checkpointing
-        self.layer_drop_theta = cfg_arch.layer_drop_theta
+        self.gradient_checkpointing = self.cfg.gradient_checkpointing
+        self.layer_drop_theta = self.cfg.layer_drop_theta
         self.register_buffer("p", torch.tensor(1.0))  # Layer scaling factor # Assign this only once
+
+        self._init_weights()
+
+    def _init_weights(self):
+        for name, module in self.named_modules():
+            _init_module(
+                name,
+                module,
+                self.cfg.init.type,
+                self.cfg.init.std,
+                self.cfg.hidden_size,
+                self.cfg.num_transformer_layers,
+            )
 
     def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
         if attention_mask is not None:
@@ -104,36 +134,40 @@ class ScriptableLM(torch.nn.Module):
         return hidden_states
 
 
-class ScriptableLMForPreTraining(torch.nn.Module):
+class ScriptableLMForPreTraining(PreTrainedModel):
     """Definitely can represent BERT, but also a lot of other things. To be used for MLM schemes."""
 
-    def __init__(self, encoder, cfg_arch):
-        super().__init__()
-        self.cfg = cfg_arch
+    config_class = crammedBertConfig
 
-        self.encoder = encoder
-        if not cfg_arch.skip_head_transform:
-            self.prediction_head = PredictionHeadComponent(cfg_arch)
+    def __init__(self, config):
+        super().__init__(config)
+        self.cfg = OmegaConf.create(config.arch)  # this could be nicer ...
+        self.encoder = ScriptableLM(config)
+        if not self.cfg.skip_head_transform:
+            self.prediction_head = PredictionHeadComponent(self.cfg)
         else:
             self.prediction_head = torch.nn.Linear(
-                cfg_arch.hidden_size,
-                cfg_arch.embedding.embedding_dim,
-                bias=cfg_arch.use_bias,
+                self.cfg.hidden_size,
+                self.cfg.embedding.embedding_dim,
+                bias=self.cfg.use_bias,
             )
 
-        if cfg_arch.loss == "szegedy":
+        if self.cfg.loss == "szegedy":
             self.decoder = torch.nn.Identity()
         else:
             if self.cfg.tie_weights:
-                self.decoder = torch.nn.Linear(cfg_arch.embedding.embedding_dim, cfg_arch.embedding.vocab_size, bias=cfg_arch.decoder_bias)
+                self.decoder = torch.nn.Linear(self.cfg.embedding.embedding_dim, self.cfg.embedding.vocab_size, bias=self.cfg.decoder_bias)
                 self.decoder.weight = self.encoder.embedding.word_embedding.weight
             else:
-                self.decoder = torch.nn.Linear(cfg_arch.hidden_size, cfg_arch.embedding.vocab_size, bias=cfg_arch.decoder_bias)
+                self.decoder = torch.nn.Linear(self.cfg.hidden_size, self.cfg.embedding.vocab_size, bias=self.cfg.decoder_bias)
 
-        self.loss_fn = _get_loss_fn(cfg_arch.loss, z_loss_factor=cfg_arch.z_loss_factor, embedding=self.encoder.embedding.word_embedding)
+        self.loss_fn = _get_loss_fn(self.cfg.loss, z_loss_factor=self.cfg.z_loss_factor, embedding=self.encoder.embedding.word_embedding)
         self.sparse_prediction = self.cfg.sparse_prediction
-        self.vocab_size = cfg_arch.embedding.vocab_size
+        self.vocab_size = self.cfg.embedding.vocab_size
 
+        self._init_weights()
+
+    def _init_weights(self):
         for name, module in self.named_modules():
             _init_module(
                 name,
@@ -178,20 +212,24 @@ class ScriptableLMForPreTraining(torch.nn.Module):
         return masked_lm_loss
 
 
-class ScriptableLMForSequenceClassification(torch.nn.Module):
+class ScriptableLMForSequenceClassification(PreTrainedModel):
     """Classification head and pooler."""
 
-    def __init__(self, encoder, cfg_arch):
-        super().__init__()
-        self.cfg = cfg_arch
+    config_class = crammedBertConfig
 
-        self.encoder = encoder
-        self.pooler = PoolingComponent(cfg_arch.classification_head, cfg_arch.hidden_size)
-        self.head = torch.nn.Linear(cfg_arch.classification_head.head_dim, cfg_arch.num_labels)
+    def __init__(self, config):
+        super().__init__(config)
+        self.cfg = OmegaConf.create(config.arch)  # this could be nicer ...
+        self.encoder = ScriptableLM(config)
+
+        self.pooler = PoolingComponent(self.cfg.classification_head, self.cfg.hidden_size)
+        self.head = torch.nn.Linear(self.cfg.classification_head.head_dim, self.cfg.num_labels)
 
         self.problem_type = None
         self.num_labels = self.cfg.num_labels
+        self._init_weights()
 
+    def _init_weights(self):
         for name, module in self.named_modules():
             _init_module(
                 name,
@@ -313,3 +351,11 @@ def _init_module(name, module, init_method, init_std=0.02, hidden_size=768, num_
     elif isinstance(module, torch.nn.LayerNorm):
         module.bias.data.zero_()
         module.weight.data.fill_(1.0)
+
+
+# ###### HF registry here? ############### #
+
+AutoConfig.register("crammedBERT", crammedBertConfig)
+AutoModel.register(crammedBertConfig, ScriptableLM)
+AutoModelForMaskedLM.register(crammedBertConfig, ScriptableLMForPreTraining)
+AutoModelForSequenceClassification.register(crammedBertConfig, ScriptableLMForSequenceClassification)

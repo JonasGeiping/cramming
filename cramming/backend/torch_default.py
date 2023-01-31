@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Basic training backend for normal pytorch training."""
 import torch
 
@@ -340,6 +338,32 @@ class TorchEngine(torch.nn.Module):
             torch.save(self.retrieve_model_state_dict(), os.path.join(full_path, "model.pth"))
             with open(os.path.join(full_path, "model_config.json"), "w") as file:
                 json.dump(OmegaConf.to_container(cfg_arch, resolve=True), file)
+
+    def push_to_hub(self, tokenizer, cfg, dryrun=False):
+        """Analogous to save_final_model, but save model to hugginface hub."""
+        from huggingface_hub import HfApi
+        from io import BytesIO
+
+        api = HfApi()
+
+        if not dryrun:
+            log.info(f"Pushing model to hub repository {cfg.impl.hf_directoy_name}.")
+            final_state_dict = self.retrieve_model_state_dict()
+            self.model.load_state_dict(final_state_dict)
+            self.model.push_to_hub(cfg.impl.hf_directoy_name)
+            tokenizer.push_to_hub(cfg.impl.hf_directoy_name)
+
+            for config_group, config_name in zip([cfg.arch, cfg.data, cfg.train], ["arch", "data", "train"]):
+                buffer = BytesIO()
+                buffer.write(json.dumps(OmegaConf.to_container(config_group, resolve=True), indent=4).encode())
+                api.upload_file(
+                    path_or_fileobj=buffer,
+                    path_in_repo=f"{config_name}_budget_hours_{cfg.budget}.json",
+                    repo_id=f"{api.whoami()['name']}/{cfg.impl.hf_directoy_name}",  # there has to be a better way to do this, but ...
+                    repo_type="model",
+                )
+        else:
+            log.info(f"Skipping huggingface upload in dryrun state. Would upload to {cfg.impl.hf_directoy_name}.")
 
     def gradinit(self, data_iterable, optim_cfg, gradinit_cfg):
         """Run data-based initialization search as described in Zhu et al.,
