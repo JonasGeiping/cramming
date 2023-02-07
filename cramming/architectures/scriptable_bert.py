@@ -80,7 +80,7 @@ class ScriptableLM(PreTrainedModel):
 
         self._init_weights()
 
-    def _init_weights(self):
+    def _init_weights(self, *args, **kwargs):
         for name, module in self.named_modules():
             _init_module(
                 name,
@@ -167,7 +167,7 @@ class ScriptableLMForPreTraining(PreTrainedModel):
 
         self._init_weights()
 
-    def _init_weights(self):
+    def _init_weights(self, *args, **kwargs):
         for name, module in self.named_modules():
             _init_module(
                 name,
@@ -178,7 +178,13 @@ class ScriptableLMForPreTraining(PreTrainedModel):
                 self.cfg.num_transformer_layers,
             )
 
-    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
+    def forward(
+        self,
+        input_ids,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.Tensor] = None,
+    ):
         outputs = self.encoder(input_ids, attention_mask)
         outputs = outputs.view(-1, outputs.shape[-1])
 
@@ -191,7 +197,7 @@ class ScriptableLMForPreTraining(PreTrainedModel):
             else:
                 masked_lm_loss = outputs.new_zeros((1,))
 
-        return dict(loss=masked_lm_loss)
+        return dict(loss=masked_lm_loss, logits=outputs)
 
     # Sparse prediction can have an unpredictable number of entries in each batch
     # depending on how MLM is running
@@ -240,7 +246,13 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
                 self.cfg.num_transformer_layers,
             )
 
-    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
+    def forward(
+        self,
+        input_ids,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.Tensor] = None,
+    ):
         logits = self.head(self.pooler(self.encoder(input_ids, attention_mask)))
 
         if labels is not None:
