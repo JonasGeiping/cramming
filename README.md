@@ -61,6 +61,7 @@ Additional Notes:
 * A simple trick to run dataset preprocessing only is to run `python pretrain.py data=... dryrun=True`, which dry-runs the training, but runs the full data preprocessing. Later runs can then re-use the cached data.
 * Dataset preprocessing is heavily parallelized. This might be a problem for your RAM. If this happens, reduce `impl.threads`. Especially the deduplication code does require substantial amounts of RAM.
 * I would run first experiments with `bookcorpus-wikipedia` only, which preprocesses comparatively quickly and only then look into the full processed and filtered C4.
+* Use `impl.sharing_strategy=file_system` on windows or macOS.
 
 
 #### Preprocessed Datasets
