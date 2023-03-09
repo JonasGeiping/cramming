@@ -34,6 +34,3 @@ objective:
 reverse_dataset_order: False
 
 budget: ${budget}
-
-gradinit:
-  enabled: False

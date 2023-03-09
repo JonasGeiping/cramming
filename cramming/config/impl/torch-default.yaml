@@ -18,5 +18,9 @@ static_graph: True
 # Misc:
 foreach_optimizer: False
 
-# Dynamo
-optimizer_context: # can be: aot_autograd_speedup, nvfuser_global, aot_nvfuser
+# Compilation
+compile_torch: True
+mode: default
+dynamic: False # this is a world of pain (when I last tested it)
+fullgraph: True # why even compile when not everywhere :>
+backend: inductor # use eager here when using the old bert-cX models

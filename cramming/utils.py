@@ -78,7 +78,9 @@ def system_startup(cfg):
     Set all required and interesting environment variables.
     """
     torch.backends.cudnn.benchmark = cfg.impl.benchmark
-    torch.multiprocessing.set_sharing_strategy(cfg.impl.sharing_strategy)
+
+    if cfg.impl.sharing_strategy is not None:
+        torch.multiprocessing.set_sharing_strategy(cfg.impl.sharing_strategy)
 
     if cfg.impl.tf32_allowed:
         torch.backends.cudnn.allow_tf32 = True

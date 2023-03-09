@@ -13,7 +13,7 @@ import transformers
 
 from torch.distributed.optim import ZeroRedundancyOptimizer
 
-from .utils import group_parameters, prepare_pretraining_dataloader, torchdynamo_compile_method, update_ema, updated_latest_weight_average
+from .utils import group_parameters, prepare_pretraining_dataloader, update_ema, updated_latest_weight_average
 from .optimizers.schedulers import get_schedule_fn
 from .optimizers import Adahessian, Shampoo, LARS, SAM, ProgressiveBatching
 
@@ -32,16 +32,25 @@ def initialize_torch(model, dataset, tokenizer, cfg_train, cfg_impl, setup=_defa
     else:
         dataloader = None
 
-    model_engine = TorchEngine(model, cfg_train, cfg_impl, setup=setup, seq_length=tokenizer.model_max_length)
+    # in most cases we can use a simpler Engine class:
+    require_full_engine = "sequence_curriculum" in cfg_train or "weight_averaging" in cfg_train or "gradinit" in cfg_train
+
+    if require_full_engine:
+        model_engine = TorchEngineFull(model, cfg_train, cfg_impl, setup=setup, seq_length=tokenizer.model_max_length)
+    else:
+        model_engine = TorchEngineMinimal(model, cfg_train, cfg_impl, setup=setup, seq_length=tokenizer.model_max_length)
     model_engine.train()
     return model_engine, model_engine.optimizer, model_engine.scheduler, dataloader
 
 
-class TorchEngine(torch.nn.Module):
-    """This class mirrors deepspeed functionality."""
+class TorchEngineMinimal(torch.nn.Module):
+    """This class mirrors deepspeed functionality. Not all changes are implemented in this version.
+
+    See TorchEngineFull for more modifications.
+    """
 
     def __init__(self, model, cfg_train, cfg_impl, setup=_default_setup, seq_length=128):
-        """Load Engine. This is the bare minimum init. The model is further traced if required."""
+        """Load Engine. The model will be compiled by default."""
         super().__init__()
 
         self.cfg_train = cfg_train
@@ -50,6 +59,7 @@ class TorchEngine(torch.nn.Module):
             self.cfg_impl.microbatch_size = self.cfg_train.batch_size
         if self.cfg_impl.microbatch_size > self.cfg_train.batch_size:
             raise ValueError(f"MBS is {self.cfg_impl.microbatch_size}, but BS is only {self.cfg_train.batch_size}.")
+        self.current_seq_length = seq_length
 
         # Mixed Precision:
         enabled = self.cfg_impl.mixed_precision if setup["device"].type != "cpu" else False
@@ -68,34 +78,19 @@ class TorchEngine(torch.nn.Module):
         self.accumulated_samples = 0  # Record the number of samples seen, reset after triggering gradient update
         self.steps = 0  # Record the number of times "step" has been triggered
 
-        # Optional sequence curriculum:
-        self.sequence_curriculum = "sequence_curriculum" in cfg_train
-        self.data_seq_length = seq_length
-        self.current_seq_length = seq_length if not self.sequence_curriculum else cfg_train.sequence_curriculum.lengths[0]
-        self.sequence_unfold = None if not self.sequence_curriculum else cfg_train.sequence_curriculum.unfold
-
-        # Optional EMA/LAWA-type weight averages
-        if "weight_averaging" in cfg_train:
-            self.weight_averaging_frequency = cfg_train.weight_averaging.frequency
-            self.weight_averaging = cfg_train.weight_averaging
-            if self.weight_averaging.type == "EMA":
-                self.param_store = [p.detach().clone() for p in model.parameters()]  # keep on CPU
-                self.buffer_store = [b.detach().clone() for b in model.buffers()]
-            else:
-                self.store = []
-        else:
-            self.weight_averaging_frequency = 0
-
         # Choose setup and move model
         self.setup = setup
         model.to(**self.setup)
 
-        # torchdynamo tracing?
-        # Ideally would be able to compile the entire .step eventually
-        self.forward = torchdynamo_compile_method(self.forward, cfg_impl.optimizer_context)
+        if cfg_impl.compile_torch:
+            model = torch.compile(
+                model,
+                mode=self.cfg_impl.mode,
+                dynamic=self.cfg_impl.dynamic,
+                fullgraph=self.cfg_impl.fullgraph,
+                backend=self.cfg_impl.backend,
+            )
 
-        # Old-school tracing?
-        model = self._script_model(model)
         if torch.distributed.is_initialized():
             self.model = self._init_distributed(model)
         else:
@@ -121,7 +116,6 @@ class TorchEngine(torch.nn.Module):
             for k, v in batch.items()
             if k in keys  # Add more keywords here if needed
         }
-        self.set_sequence_curriculum_(device_batch)
         return device_batch
 
     def forward(self, *inputs, **kwargs):
@@ -155,41 +149,12 @@ class TorchEngine(torch.nn.Module):
             self.scaler.update()
             self.optimizer.zero_grad()
             self.schedule_batch_size()
-            self.schedule_curriculum()
-            self.moving_average_computation()
         self.scheduler.step()  # Trigger in every step, otherwise things get annoying with grad accumulation
 
     def set_train_batch_size(self, batch_size):
         """Allow dynamic modifications of batch size."""
         self.current_batch_size = batch_size
         self.accumulation_steps_expected = self.current_batch_size // self.cfg_impl.microbatch_size
-
-    def set_sequence_curriculum_(self, device_batch):
-        """Assume huggingface data is B S"""
-        if self.sequence_curriculum:
-            for key, tensor in device_batch.items():
-                if self.sequence_unfold:
-                    device_batch[key] = tensor.view(-1, self.current_seq_length)
-                else:
-                    device_batch[key] = tensor[:, : self.current_seq_length].clone()
-
-    def record_batch_size(self):
-        if self.cfg_train.optim_mod.name != "progressive-batching":
-            return self.current_batch_size
-        else:
-            return self.optimizer.last_full_step_accumulation * self.current_batch_size
-
-    def record_tokens_per_step(self):
-        """Tokens in each microbatch step."""
-        if not self.sequence_curriculum:
-            return self.current_seq_length * self.cfg_impl.microbatch_size
-        else:
-            if self.sequence_unfold:
-                # Same number of tokens in this case:
-                return self.current_seq_length * (self.data_seq_length // self.current_seq_length) * self.cfg_impl.microbatch_size
-            else:
-                # Reduced number of tokens here:
-                return self.current_seq_length * self.cfg_impl.microbatch_size
 
     def schedule_batch_size(self):
         """Optionally implement linear batch size ramp-ups."""
@@ -210,45 +175,19 @@ class TorchEngine(torch.nn.Module):
             new_batch_size = self.cfg_train.batch_size
         self.set_train_batch_size(new_batch_size)
 
-    def schedule_curriculum(self):
-        """Optionally implement linear sequence lengths curriculum."""
-        if self.sequence_curriculum:
-            # Sequence curriculum should be a dict of two lists:
-            # lengths (needs to be monotone ascending integers)
-            # triggers (needs to be monotone ascending floats between 0 and 1)
-            # and a keyword unfold = True/False
-            elapsed_hours = (time.time() - self.initial_time) / 60 / 60
-            fraction_elapsed = elapsed_hours / self.cfg_train.budget
-            lengths = self.cfg_train.sequence_curriculum.lengths
-            triggers = self.cfg_train.sequence_curriculum.triggers
-            for trigger, length in zip(triggers, lengths):
-                if fraction_elapsed > trigger:
-                    self.current_seq_length = length
+    def record_batch_size(self):
+        if self.cfg_train.optim_mod.name != "progressive-batching":
+            return self.current_batch_size
+        else:
+            return self.optimizer.last_full_step_accumulation * self.current_batch_size
 
-    def moving_average_computation(self):
-        if self.weight_averaging_frequency > 0:
-            if (self.steps % self.weight_averaging_frequency) == 0:
-                params = [p.detach().cpu() for p in self.model.parameters()]
-                buffers = [b.detach().cpu() for b in self.model.buffers()]
-                if self.weight_averaging.type == "EMA":
-                    update_ema(params, self.param_store, buffers, self.buffer_store, momentum=self.weight_averaging.momentum)
-                else:  # latest weight averaging
-                    self.param_store, self.buffer_store = updated_latest_weight_average(
-                        params, buffers, self.store, last_k=self.weight_averaging.last_k
-                    )
+    def record_tokens_per_step(self):
+        """Tokens in each microbatch step."""
+        return self.current_seq_length * self.cfg_impl.microbatch_size
 
     @torch.no_grad()
     def retrieve_model_state_dict(self):
-        if self.weight_averaging_frequency > 0:
-            # Use weight averaged weights
-            for param, param_ma in zip(self.model.parameters(), self.param_store):
-                param.copy_(param_ma.data)
-            for buffer, buffer_ma in zip(self.model.buffers(), self.buffer_store):
-                buffer.copy_(buffer_ma.data)
-            return self.model.state_dict()
-        else:
-            # Else use normal state dict
-            return self.model.state_dict()
+        return self.model.state_dict()
 
     def _init_distributed(self, model):
         model = torch.nn.parallel.DistributedDataParallel(
@@ -260,20 +199,6 @@ class TorchEngine(torch.nn.Module):
             gradient_as_bucket_view=self.cfg_impl.gradient_as_bucket_view,
             static_graph=self.cfg_impl.static_graph,
         )
-        return model
-
-    def _script_model(self, model):
-        if self.cfg_impl.jit == "trace":
-            with torch.autocast(**self.amp_settings):
-                # No guarantees for complicated models
-                input_setup = dict(dtype=torch.long, device=self.setup["device"])
-                templates = torch.randint(0, model.vocab_size, (*self.cfg_impl.trace_shape,), **input_setup)
-                labels = torch.randint(0, model.vocab_size, (*self.cfg_impl.trace_shape,), **input_setup)
-
-                model = torch.jit.trace(_ModelArgWrapper(model), (templates, labels), strict=False)
-        elif self.cfg_impl.jit == "script":
-            # This does not work for huggingface models
-            model = torch.jit.script(model)
         return model
 
     def load_checkpoint(self, cfg_arch, file, skip_optim_state=True):
@@ -305,22 +230,6 @@ class TorchEngine(torch.nn.Module):
                     log.info(f"State dict difference is {str(e).split('Error(s) in loading state_dict for')[1]}... Ok?")
                     self.model.load_state_dict(sanitized_state, strict=False)
                 self.model.to(**self.setup)
-
-    def save_training_checkpoint(self, identifier, directory="checkpoints", state=None):
-        """Path, identifier and additional client state. This checkpoint can be used to resume training.
-        The default behavior is to save this checkpoint relative to the training working directory.
-        """
-        try:
-            identifier_str = f"{identifier:2.4f}"
-        except ValueError:
-            identifier_str = str(identifier)
-        file = os.path.join(directory, f"{identifier:2.4f}.pth")
-        os.makedirs(path, exist_ok=True)
-
-        optim_state = self.optimizer.state_dict()
-        model_state = self.retrieve_model_state_dict()
-        scheduler_state = self.scheduler.state_dict()
-        torch.save([optim_state, model_state, scheduler_state, state], file)
 
     def save_final_model(self, base_directory, identifier, tokenizer, cfg_arch, dryrun=False):
         """This checkpoint can be used for downstream tasks.
@@ -364,6 +273,126 @@ class TorchEngine(torch.nn.Module):
                 )
         else:
             log.info(f"Skipping huggingface upload in dryrun state. Would upload to {cfg.impl.hf_directoy_name}.")
+
+
+class TorchEngineFull(TorchEngineMinimal):
+    """This class mirrors deepspeed functionality. Not all changes are implemented in this version.
+
+    See TorchEngineFull for more modifications.
+    """
+
+    def __init__(self, model, cfg_train, cfg_impl, setup=_default_setup, seq_length=128):
+        """Load Engine. The model will be compiled by default."""
+        super().__init__(model, cfg_train, cfg_impl, setup, seq_length)
+
+        # Optional sequence curriculum:
+        self.sequence_curriculum = "sequence_curriculum" in cfg_train
+        self.data_seq_length = seq_length
+        self.current_seq_length = seq_length if not self.sequence_curriculum else cfg_train.sequence_curriculum.lengths[0]
+        self.sequence_unfold = None if not self.sequence_curriculum else cfg_train.sequence_curriculum.unfold
+
+        # Optional EMA/LAWA-type weight averages
+        if "weight_averaging" in cfg_train:
+            self.weight_averaging_frequency = cfg_train.weight_averaging.frequency
+            self.weight_averaging = cfg_train.weight_averaging
+            if self.weight_averaging.type == "EMA":
+                self.param_store = [p.detach().clone() for p in model.parameters()]  # keep on CPU
+                self.buffer_store = [b.detach().clone() for b in model.buffers()]
+            else:
+                self.store = []
+        else:
+            self.weight_averaging_frequency = 0
+        self.initial_time = time.time()
+
+    def optimizer_step(self):
+        """Requires a scheduler that is based on iterations instead of epochs."""
+        super().optimizer_step()
+        if self.accumulated_samples >= self.current_batch_size:
+            self.schedule_curriculum()
+            self.moving_average_computation()
+
+    def to_device(self, batch: dict[str, torch.Tensor], keys: list[str] = ["input_ids", "labels"]):
+        """Move batch of data into device memory."""
+        device_batch = super().to_device(batch)
+        self.set_sequence_curriculum_(device_batch)
+        return device_batch
+
+    def set_sequence_curriculum_(self, device_batch):
+        """Assume huggingface data is B S"""
+        if self.sequence_curriculum:
+            for key, tensor in device_batch.items():
+                if self.sequence_unfold:
+                    device_batch[key] = tensor.view(-1, self.current_seq_length)
+                else:
+                    device_batch[key] = tensor[:, : self.current_seq_length].clone()
+
+    def schedule_curriculum(self):
+        """Optionally implement linear sequence lengths curriculum."""
+        if self.sequence_curriculum:
+            # Sequence curriculum should be a dict of two lists:
+            # lengths (needs to be monotone ascending integers)
+            # triggers (needs to be monotone ascending floats between 0 and 1)
+            # and a keyword unfold = True/False
+            elapsed_hours = (time.time() - self.initial_time) / 60 / 60
+            fraction_elapsed = elapsed_hours / self.cfg_train.budget
+            lengths = self.cfg_train.sequence_curriculum.lengths
+            triggers = self.cfg_train.sequence_curriculum.triggers
+            for trigger, length in zip(triggers, lengths):
+                if fraction_elapsed > trigger:
+                    self.current_seq_length = length
+
+    def record_tokens_per_step(self):
+        """Tokens in each microbatch step."""
+        if not self.sequence_curriculum:
+            return self.current_seq_length * self.cfg_impl.microbatch_size
+        else:
+            if self.sequence_unfold:
+                # Same number of tokens in this case:
+                return self.current_seq_length * (self.data_seq_length // self.current_seq_length) * self.cfg_impl.microbatch_size
+            else:
+                # Reduced number of tokens here:
+                return self.current_seq_length * self.cfg_impl.microbatch_size
+
+    def moving_average_computation(self):
+        if self.weight_averaging_frequency > 0:
+            if (self.steps % self.weight_averaging_frequency) == 0:
+                params = [p.detach().cpu() for p in self.model.parameters()]
+                buffers = [b.detach().cpu() for b in self.model.buffers()]
+                if self.weight_averaging.type == "EMA":
+                    update_ema(params, self.param_store, buffers, self.buffer_store, momentum=self.weight_averaging.momentum)
+                else:  # latest weight averaging
+                    self.param_store, self.buffer_store = updated_latest_weight_average(
+                        params, buffers, self.store, last_k=self.weight_averaging.last_k
+                    )
+
+    @torch.no_grad()
+    def retrieve_model_state_dict(self):
+        if self.weight_averaging_frequency > 0:
+            # Use weight averaged weights
+            for param, param_ma in zip(self.model.parameters(), self.param_store):
+                param.copy_(param_ma.data)
+            for buffer, buffer_ma in zip(self.model.buffers(), self.buffer_store):
+                buffer.copy_(buffer_ma.data)
+            return self.model.state_dict()
+        else:
+            # Else use normal state dict
+            return self.model.state_dict()
+
+    def save_training_checkpoint(self, identifier, directory="checkpoints", state=None):
+        """Path, identifier and additional client state. This checkpoint can be used to resume training.
+        The default behavior is to save this checkpoint relative to the training working directory.
+        """
+        try:
+            identifier_str = f"{identifier:2.4f}"
+        except ValueError:
+            identifier_str = str(identifier)
+        file = os.path.join(directory, f"{identifier:2.4f}.pth")
+        os.makedirs(path, exist_ok=True)
+
+        optim_state = self.optimizer.state_dict()
+        model_state = self.retrieve_model_state_dict()
+        scheduler_state = self.scheduler.state_dict()
+        torch.save([optim_state, model_state, scheduler_state, state], file)
 
     def gradinit(self, data_iterable, optim_cfg, gradinit_cfg):
         """Run data-based initialization search as described in Zhu et al.,
@@ -456,6 +485,10 @@ def _load_optimizer(model, cfg_train, cfg_impl):
         optimizer_class = Shampoo
     elif cfg_train.optim.type == "AdaHessian":
         optimizer_class = Adahessian
+    elif cfg_train.optim.type == "Lion":
+        from lion_pytorch import Lion
+
+        optimizer_class = Lion
     else:
         raise ValueError(f"Invalid optimizer {cfg_train.optim.type} given.")
     optimizer_args = {k: v for k, v in cfg_train.optim.items() if k != "type"}

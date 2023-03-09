@@ -39,13 +39,12 @@ objective:
 reverse_dataset_order: False
 
 budget: ${budget}
-
-gradinit:
-  enabled: False
-  # eta: 1.0
-  # tau: 1e-3 # step size
-  # steps: 50
-  # min_scale: 1e-3
-  # max_scale: 1e3
-  # step_type: sign-grad # sign-grad or grad
-  # second_order: False
+# gradinit:
+#   enabled: False
+# eta: 1.0
+# tau: 1e-3 # step size
+# steps: 50
+# min_scale: 1e-3
+# max_scale: 1e3
+# step_type: sign-grad # sign-grad or grad
+# second_order: False
