@@ -106,7 +106,7 @@ def prepare_pretraining_dataloader(dataset, tokenizer, cfg_train, cfg_impl):
         num_workers=num_workers,
         pin_memory=cfg_impl.pin_memory,
         drop_last=True,
-        prefetch_factor=cfg_impl.prefetch_factor if num_workers > 0 else 2,
+        prefetch_factor=cfg_impl.prefetch_factor if num_workers > 0 else None,
         persistent_workers=cfg_impl.persistent_workers if num_workers > 0 else False,
         collate_fn=collate_fn,
     )
@@ -166,6 +166,53 @@ class PatchedDataCollatorForLanguageModeling(transformers.DataCollatorForLanguag
     def torch_mask_tokens(self, inputs=None, special_tokens_mask=None):
         """
         Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
+        The ratios in this version are always fixed so that the number of masks is never dynamic!
+
+        Also special_tokens_masks are disregarded in this flavor...
+
+        According to timeit this is not slower than the old approach (with was fast enough)
+        """
+        labels = inputs.clone()
+
+        number_of_masks = int(self.mlm_probability * inputs.shape[1])
+        mask_locations = torch.argsort(torch.randint_like(inputs, inputs.shape[1]))[:, :number_of_masks]
+        # this was slightly fudged to be faster. A draw of torch.rand would be more random, but take slightly longer to sort
+
+        masked_indices = torch.zeros_like(inputs, dtype=torch.bool)
+        masked_indices.scatter_(1, mask_locations, 1)
+        labels[~masked_indices] = -100  # We only compute loss on masked tokens
+
+        if self.use_80_20_rule:
+            # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
+            first_80percent_mask_locations = mask_locations[:, : int(0.8 * number_of_masks)]
+
+            indices_replaced = torch.zeros_like(inputs, dtype=torch.bool)
+            indices_replaced.scatter_(1, first_80percent_mask_locations, 1)
+            inputs[indices_replaced] = self.mask_token
+
+            # 10% of the time, we replace masked input tokens with random word
+            next_10percent_mask_locations = mask_locations[:, int(0.8 * number_of_masks) : int(0.9 * number_of_masks)]
+
+            indices_random = torch.zeros_like(inputs, dtype=torch.bool)
+            indices_random.scatter_(1, next_10percent_mask_locations, 1)
+            random_words = torch.randint(len(self.tokenizer), labels.shape, dtype=inputs.dtype)
+            inputs[indices_random] = random_words[indices_random]
+
+            # The rest of the time (10% of the time) we keep the masked input tokens unchanged
+            pass
+        else:
+            # 100% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
+            inputs[masked_indices] = self.mask_token
+
+        if self.token_drop > 0:
+            inputs, labels = self._drop_tokens(inputs, labels)
+        return inputs, labels
+
+    def _legacy_torch_mask_tokens(self, inputs=None, special_tokens_mask=None):
+        """
+        Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original.
+
+        This is the orignal randomized draw.
         """
         labels = inputs.clone()
         # We sample a few tokens in each sequence for MLM training (with probability `self.mlm_probability`)
@@ -178,6 +225,7 @@ class PatchedDataCollatorForLanguageModeling(transformers.DataCollatorForLanguag
 
         probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
         masked_indices = torch.bernoulli(probability_matrix).bool()
+
         labels[~masked_indices] = -100  # We only compute loss on masked tokens
 
         if self.use_80_20_rule:
@@ -218,10 +266,10 @@ class PatchedDataCollatorForLanguageModeling(transformers.DataCollatorForLanguag
             #     block[idx] = example[key]
             out = None
             if torch.utils.data.get_worker_info() is not None:
-                storage = elem._storage()._new_shared(len(examples) * 8 * elem.shape[0], device=elem.device)  # 8 for byte->long
+                # storage = elem._storage()._new_shared(len(examples) * 8 * elem.shape[0], device=elem.device)  # 8 for byte->long
                 # storage = elem.untyped_storage()._new_shared(len(examples) * 8 * elem.shape[0], device=elem.device)  # 8 for byte->long
                 # out = elem.new(storage).resize_(len(examples), elem.shape[0])
-                # storage = elem._typed_storage()._new_shared(len(examples) * elem.shape[0], device=elem.device) # this will be pytorch 2.0
+                storage = elem._typed_storage()._new_shared(len(examples) * elem.shape[0], device=elem.device)
                 out = elem.new(storage).resize_(len(examples), elem.shape[0])
 
             batch[key] = torch.stack([example[key] for example in examples], 0, out=out).contiguous()

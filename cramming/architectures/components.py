@@ -26,12 +26,7 @@ class EmbeddingComponent(torch.nn.Module):
             self.pos_embedding = ScaledSinosoidal(cfg_embedding.embedding_dim, cfg_embedding.max_seq_length)
         else:
             self.pos_embedding = None
-        #
-        # if cfg_embedding.fusion:
-        #    self.pos_embedding = torch.jit.script(self.pos_embedding)
-        # Do not fuse here!
-        # fusing here breaks everything and the model stalls at cross-entropy loss of 7
-        #
+
         self.dropout = torch.nn.Dropout(p=cfg_embedding.dropout_prob, inplace=INPLACE)
         if cfg_embedding.normalization:
             self.norm = _get_norm_fn(norm)(cfg_embedding.embedding_dim, eps=norm_eps)
@@ -49,8 +44,15 @@ class AttentionComponent(torch.nn.Module):
     def __init__(self, idx, hidden_size, cfg_attention, use_bias=True):
         super().__init__()
         self.self_attention = get_attention_mechanism(idx, hidden_size, cfg_attention)
+
+        if cfg_attention.low_level_fusion:
+            if hasattr(self.self_attention, "sequence_op"):
+                self.self_attention.sequence_op = torch.jit.script(self.sequence_op)
+            if hasattr(self.self_attention, "rotary_emb"):
+                self.self_attention.rotary_emb = torch.jit.script(self.rotary_emb)
         if cfg_attention.high_level_fusion:
             self.self_attention = torch.jit.script(self.self_attention)
+
         if cfg_attention.skip_output_projection:
             self.dense = torch.nn.Identity()
         else:
@@ -151,6 +153,11 @@ class TransformerLayer(torch.nn.Module):
                 states = self.norm1(self.fn_eval(states, self.attn(states, attention_mask), self.alpha, res_scale))
                 states = self.norm2(self.fn_eval(states, self.ffn(states), self.alpha, res_scale))
 
+        # this thing is simply a terrible version of
+        # states = states + self.dropout(self.attn(self.norm1(states), attention_mask))
+        # states = states + self.dropout(self.ffn(self.norm2(states)))
+        # hopefully torch 2.0 can make it obsolete
+
         return states
 
 
@@ -227,9 +234,9 @@ def _get_layer_fn(layer_macro_type):
 
 def _get_norm_fn(norm_name):
     if norm_name == "ScaleNorm":
-        norm_fn = ScriptedScaleNorm
+        norm_fn = ScaleNorm
     elif norm_name == "RMSNorm":
-        norm_fn = ScriptedRMSNorm
+        norm_fn = RMSNorm
     elif norm_name == "ApexLayerNorm":
         from apex.normalization import FusedLayerNorm
 
@@ -253,13 +260,9 @@ def _get_nonlin_fn(nonlin_name, use_gating=True):
         nonlin_fn = getattr(torch.nn, nonlin_name)
 
     if wrap_in_glu:
-        return partial(ScriptedGLU, nonlin_fn)
+        return partial(GLU, nonlin_fn)
     else:
         return nonlin_fn
-
-
-def ScriptedGLU(*args, **kwargs):
-    return torch.jit.script(GLU(*args, **kwargs))
 
 
 class GLU(torch.nn.Module):
@@ -275,14 +278,6 @@ class GLU(torch.nn.Module):
     def forward(self, inputs):
         x, gate = inputs.chunk(2, dim=-1)
         return self.sub_activation(gate) * x
-
-
-def ScriptedScaleNorm(hidden_size: int, eps: float = 1e-5):
-    return torch.jit.script(ScaleNorm(hidden_size, eps))
-
-
-def ScriptedRMSNorm(hidden_size: int, eps: float = 1e-8):
-    return torch.jit.script(RMSNorm(hidden_size, eps))
 
 
 class ScaleNorm(torch.nn.Module):

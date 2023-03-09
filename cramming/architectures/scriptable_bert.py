@@ -197,7 +197,7 @@ class ScriptableLMForPreTraining(PreTrainedModel):
             else:
                 masked_lm_loss = outputs.new_zeros((1,))
 
-        return dict(loss=masked_lm_loss, logits=outputs)
+        return {"logits": outputs, "loss": masked_lm_loss}
 
     # Sparse prediction can have an unpredictable number of entries in each batch
     # depending on how MLM is running
@@ -279,7 +279,7 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
         else:
             loss = logits.new_zeros((1,))
 
-        return dict(logits=logits, loss=loss)
+        return {"logits": logits, "loss": loss}
 
 
 def _get_loss_fn(loss_fn_name, z_loss_factor=0.0, embedding=torch.nn.Identity()):

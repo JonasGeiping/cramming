@@ -5,7 +5,7 @@ from .scriptable_bert import construct_scriptable_bert
 from .funnel_transformers import construct_scriptable_funnel
 from .recurrent_transformers import construct_scriptable_recurrent
 from .sanity_check import SanityCheckforPreTraining
-from .fixed_cramlm import construct_fixed_cramlm
+from .crammed_bert import construct_crammed_bert
 
 import logging
 from ..utils import is_main_process
@@ -25,8 +25,8 @@ def construct_model(cfg_arch, vocab_size, downstream_classes=None):
             model = construct_scriptable_recurrent(cfg_arch, vocab_size, downstream_classes)
         elif "SanityCheckLM" in cfg_arch.architectures:
             model = SanityCheckforPreTraining(cfg_arch.width, vocab_size)
-        elif "FusedCraMLM" in cfg_arch.architectures:
-            model = construct_fixed_cramlm(cfg_arch, vocab_size, downstream_classes)
+        elif "ScriptableCrammedBERT" in cfg_arch.architectures:
+            model = construct_crammed_bert(cfg_arch, vocab_size, downstream_classes)
 
     if model is not None:  # Return local model arch
         num_params = sum([p.numel() for p in model.parameters()])
