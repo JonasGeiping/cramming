@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If this is helpful, please cite our arxiv preprint (see below)."
+authors:
+- family-names: "Geiping"
+  given-names: "Jonas"
+- family-names: "Goldstein"
+  given-names: "Tom"
+title: "Cramming: Training a Language Model on a Single GPU in One Day"
+version: 1.0.0
+doi: 10.48550/arXiv.2212.14034
+date-released: 2022-12-28
+url: "https://arxiv.org/abs/2212.14034"
+references:
+  - type: article
+    authors:
+      - family-names: "Geiping"
+        given-names: "Jonas"
+        email: jonas.geiping@gmail.com
+        affiliation: "University of Maryland, College Park"
+      - family-names: "Goldstein"
+        given-names: "Tom"
+        affiliation: "University of Maryland, College Park"
+    title: "Cramming: Training a Language Model on a Single GPU in One Day"
+    version: 1.0.0
+    doi: 10.48550/arXiv.2212.14034
+    date-released: 2022-12-28
+    url: "https://arxiv.org/abs/2212.14034"
+    year: 2022
+    journal: ArXiv
