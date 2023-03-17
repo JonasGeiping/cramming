@@ -62,7 +62,7 @@ def main_training_process(cfg, setup):
 
         # Checkpointing is triggered from stopping criteria and normal intervals
         if cfg.impl.save_intermediate_checkpoints and step % cfg.impl.save_every_nth_step == 0:
-            state = dict(step=step, tokenizer_name=tokenizer.name)
+            state = dict(step=step, tokenizer_name=tokenizer.name_or_path)
             checkpoint_id = loss.item()
             if cramming.utils.is_main_process():
                 model_engine.save_training_checkpoint(checkpoint_id, state=state)
