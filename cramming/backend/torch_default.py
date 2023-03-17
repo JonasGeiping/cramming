@@ -315,7 +315,7 @@ class TorchEngine(torch.nn.Module):
         except ValueError:
             identifier_str = str(identifier)
         file = os.path.join(directory, f"{identifier:2.4f}.pth")
-        os.makedirs(path, exist_ok=True)
+        os.makedirs(directory, exist_ok=True)
 
         optim_state = self.optimizer.state_dict()
         model_state = self.retrieve_model_state_dict()
