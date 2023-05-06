@@ -104,18 +104,22 @@ to evaluate the model. The recipe called "crammed BERT" in the paper corresponds
 
 ## Additional Recipes
 Pretraining:
-Single GPU:
+Single GPU, original BERT settings:
 ```
 python pretrain.py name=bert data=bookcorpus-wikipedia arch=bert-original train=bert-original
 ```
-Multi-GPU:
+Multi-GPU, original BERT settings:
 ```
 torchrun --nproc_per_node=4 --standalone pretrain.py name=bert4gpu  data=bookcorpus-wikipedia arch=bert-original train=bert-original
 ```
 
 Eval a huggingface checkpoint:
 ```
-python eval.py dryrun=True eval=rte name=bert-finetuning eval.checkpoint=hf://bert-base-uncased
+python eval.py eval=rte name=bert-finetuning eval.checkpoint=hf://bert-base-uncased
+```
+Eval a local checkpoint:
+```
+python eval.py eval=rte name=NAME_OF_PRETRAINING_RUN eval.checkpoint=latest
 ```
 
 Sanity check for distributed code on CPU:
