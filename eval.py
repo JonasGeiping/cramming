@@ -3,6 +3,7 @@
 import torch
 import hydra
 
+from tqdm import tqdm
 
 import time
 import datetime
@@ -40,7 +41,7 @@ def main_downstream_process(cfg, setup):
         for epoch in range(cfg.eval.epochs):
             train_time = time.time()
 
-            for step, batch in enumerate(task["trainloader"]):
+            for step, batch in tqdm(enumerate(task["trainloader"]), total=len(task["trainloader"])):
                 # Heavy lifting is moved to engines
                 device_batch = model_engine.to_device(batch, keys=["input_ids", "labels", "attention_mask"])
                 loss = model_engine.step(device_batch)
