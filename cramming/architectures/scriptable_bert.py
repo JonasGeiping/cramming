@@ -225,6 +225,7 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
 
     def __init__(self, config):
         super().__init__(config)
+        config.arch['num_labels'] = config.num_labels
         self.cfg = OmegaConf.create(config.arch)  # this could be nicer ...
         self.encoder = ScriptableLM(config)
 
@@ -235,16 +236,26 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
         self.num_labels = self.cfg.num_labels
         self._init_weights()
 
-    def _init_weights(self):
-        for name, module in self.named_modules():
+    def _init_weights(self, module=None):
+        if module:
             _init_module(
-                name,
+                None,
                 module,
                 self.cfg.init.type,
                 self.cfg.init.std,
                 self.cfg.hidden_size,
                 self.cfg.num_transformer_layers,
             )
+        else:
+            for name, module in self.named_modules():
+                _init_module(
+                    name,
+                    module,
+                    self.cfg.init.type,
+                    self.cfg.init.std,
+                    self.cfg.hidden_size,
+                    self.cfg.num_transformer_layers,
+                )
 
     def forward(
         self,
