@@ -13,7 +13,7 @@ import transformers
 
 from torch.distributed.optim import ZeroRedundancyOptimizer
 
-from .utils import group_parameters, prepare_pretraining_dataloader, torchdynamo_compile_method, update_ema, updated_latest_weight_average
+from .utils import group_parameters, prepare_pretraining_dataloader, update_ema, updated_latest_weight_average, TORCH2
 from .optimizers.schedulers import get_schedule_fn
 from .optimizers import Adahessian, Shampoo, LARS, SAM, ProgressiveBatching
 
@@ -90,10 +90,6 @@ class TorchEngine(torch.nn.Module):
         self.setup = setup
         model.to(**self.setup)
 
-        # torchdynamo tracing?
-        # Ideally would be able to compile the entire .step eventually
-        self.forward = torchdynamo_compile_method(self.forward, cfg_impl.optimizer_context)
-
         # Old-school tracing?
         model = self._script_model(model)
         if torch.distributed.is_initialized():
@@ -106,6 +102,14 @@ class TorchEngine(torch.nn.Module):
             self.forward_attention_masks = False
 
         self.optimizer, self.scheduler = _load_optimizer(model, cfg_train, cfg_impl)
+
+        # compile model using torch.compile
+        if TORCH2 and self.cfg_impl.compile:
+            self.model = torch.compile(self.model, backend=self.cfg_impl.compile_backend, mode=self.cfg_impl.mode)
+            self.compiled = True
+        else:
+            self.compiled = False
+
         self.initial_time = time.time()
 
     def step(self, batch: dict[str, torch.Tensor]):
@@ -245,7 +249,9 @@ class TorchEngine(torch.nn.Module):
                 param.copy_(param_ma.data)
             for buffer, buffer_ma in zip(self.model.buffers(), self.buffer_store):
                 buffer.copy_(buffer_ma.data)
-            return self.model.state_dict()
+        if self.compiled:
+            # Return non-compiled parameter names
+            return self.model._orig_mod.state_dict()
         else:
             # Else use normal state dict
             return self.model.state_dict()
@@ -299,6 +305,13 @@ class TorchEngine(torch.nn.Module):
                     for k, v in model_state.items():
                         if k.startswith("module."):
                             k = k[7:]
+                        # It seems like PyTorch should take care of mapping compiled and non-compiled names,
+                        # but it doesn't so we have to do it here. This section handels both cases of a
+                        # compiled model with non-compiled weights, and vice-versa
+                        if self.compiled and not k.startswith("_orig_mod."):
+                            k = "_orig_mod." + k
+                        elif not self.compiled and k.startswith("_orig_mod."):
+                            k = k[10:]
                         sanitized_state[k] = v
                     self.model.load_state_dict(sanitized_state, strict=True)
                 except RuntimeError as e:

@@ -1,5 +1,6 @@
 """Attention modules. Most code heavily stolen from the GPT-neoX implementation"""
 import torch
+import torch.nn.functional as F
 from transformers.models.bert.modeling_bert import BertSelfAttention
 
 from .embeddings import Rotary, RotarySanityCheck, RotaryEleutherAI
@@ -7,6 +8,8 @@ from typing import Optional
 from einops.layers.torch import Rearrange
 from einops import rearrange
 
+from .utils import maybe_allow_einops_compile
+maybe_allow_einops_compile()
 
 def get_attention_mechanism(
     idx,
@@ -22,6 +25,8 @@ def get_attention_mechanism(
         mechanism = BertAttentionWrapper(hidden_size, cfg_attention)  # always includes bias!
     elif cfg_attention.type == "flash-attention-impl":  # the fast implementation called flash
         mechanism = FlashMultiHeadAttention(hidden_size, cfg_attention)
+    elif cfg_attention.type == "pytorch-flash-attention":  # fast native pytorch 2.0 implementation
+        mechanism = PyTorchFlashMultiHeadAttention(hidden_size, cfg_attention)
     elif cfg_attention.type == "fourier":
         mechanism = FourierMixing(hidden_size, cfg_attention)
     elif cfg_attention.type == "fourier-experimental":
@@ -315,6 +320,54 @@ class FlashMultiHeadAttention(torch.nn.Module):
             qkv = rearrange(qkv, "b s (three h d) -> b s three h d", three=3, h=self.flash_mha.num_heads)
         context, attn_weights = self.flash_inner(qkv)
         return rearrange(context, "b s h d -> b s (h d)")
+
+
+class PyTorchFlashMultiHeadAttention(torch.nn.Module):
+    """
+    PyTorch Flash MHA implementation using the beta `scaled_dot_product_attention`.
+    Doesn't graph break with `torch.compile`. Requires inputs to be float16 or bfloat16.
+    """
+
+    __constants__ = ["LAYOUT"]
+    LAYOUT: str = "[B S H]"
+
+    def __init__(self, hidden_size, cfg_attention):
+        super().__init__()
+
+        # PyTorch 2.0 documentation states using the `torch.backends.cuda.sdp_kernel()` context manager is
+        # prefered over this method, but context managers cause graph breaks with `compile` and this doesn't
+        # https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
+        if not torch.backends.cuda.flash_sdp_enabled():
+            torch.backends.cuda.enable_flash_sdp(True)
+
+        self.num_heads = cfg_attention.num_attention_heads
+        self.dropout = float(cfg_attention.dropout_prob)
+        self.causal = cfg_attention.causal_attention
+
+        self.Wqkv = torch.nn.Linear(hidden_size, 3 * hidden_size, bias=cfg_attention.qkv_bias)
+
+        self.hidden_per_head = hidden_size // self.num_heads
+        if cfg_attention.rotary_embedding:
+            if cfg_attention.low_level_fusion:
+                self.rotary_emb = torch.jit.script(Rotary(self.hidden_per_head, seq_dim=1))
+            else:
+                self.rotary_emb = Rotary(self.hidden_per_head, seq_dim=1)
+        else:
+            self.rotary_emb = None
+        self.output_dim = hidden_size
+
+    def forward(self, hidden_states, attention_mask: Optional[torch.Tensor] = None):
+        """
+        Returns only the rearranged, unprojected output
+        """
+        B, S, H = hidden_states.shape
+        query, key, value = self.Wqkv(hidden_states).reshape(B, S, 3, self.num_heads, self.hidden_per_head).permute(0, 3, 2, 1, 4).chunk(3,2)
+        query, key, value = query.squeeze(2), key.squeeze(2), value.squeeze(2)
+        if self.rotary_emb is not None:
+            query, key = self.rotary_emb(query, key)
+
+        context = F.scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=self.dropout, is_causal=self.causal)
+        return context.permute(0, 2, 1, 3).view(B, S, H)
 
 
 class FunnelAttention(SeqFirstSelfAttention):

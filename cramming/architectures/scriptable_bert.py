@@ -18,6 +18,7 @@ from .components import (
     Sequential,
     get_extended_attention_mask,
 )
+from .utils import maybe_skip_compile
 
 
 def construct_scriptable_bert(cfg_arch, vocab_size, downstream_classes=None):
@@ -202,7 +203,7 @@ class ScriptableLMForPreTraining(PreTrainedModel):
     # Sparse prediction can have an unpredictable number of entries in each batch
     # depending on how MLM is running
     # for this reason, the code has to fall back to eager mode there
-    # @torchdynamo.disable
+    @maybe_skip_compile()
     def _forward_dynamic(self, outputs: torch.Tensor, labels: Optional[torch.Tensor] = None):
         if labels is not None:
             labels = labels.view(-1)

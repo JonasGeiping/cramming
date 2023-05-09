@@ -14,6 +14,7 @@ from .components import (
     PoolingComponent,
     PredictionHeadComponent,
 )
+from .utils import maybe_skip_compile
 
 
 def construct_fixed_cramlm(cfg_arch, vocab_size, downstream_classes=None):
@@ -126,7 +127,7 @@ class ScriptableLMForPreTraining(torch.nn.Module):
     # Sparse prediction can have an unpredictable number of entries in each batch
     # depending on how MLM is running
     # for this reason, the code has to fall back to eager mode there
-    # @torchdynamo.disable
+    @maybe_skip_compile()
     def _forward_dynamic(self, outputs: torch.Tensor, labels: Optional[torch.Tensor] = None):
         if labels is not None:
             labels = labels.view(-1)

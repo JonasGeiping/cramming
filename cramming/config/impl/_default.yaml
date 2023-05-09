@@ -37,6 +37,11 @@ deterministic: False # This option will disable non-deterministic ops
 non_blocking: True # unblocked .to(device) handles
 tf32_allowed: True
 
+# Compile using PyTorch 2.0's `compile`
+compile: False
+compile_backend: inductor
+mode: null
+
 # JIT:
 jit: # Global JIT. Can be "script" (but this doesnt work for huggingface models) or "trace" (but trace does not work with AMP)
 jit_instruction_type: nvfuser-profiler

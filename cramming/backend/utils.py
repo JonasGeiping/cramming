@@ -1,11 +1,12 @@
 """Utilities common to several backends."""
 import os
-
+from packaging.version import parse
 
 import torch
 import transformers
 from torch.utils.data import DataLoader
 
+TORCH2 = parse(torch.__version__) >= parse('2.0')
 
 def get_num_workers(cfg_impl):
     if cfg_impl.threads > 0:
@@ -218,10 +219,10 @@ class PatchedDataCollatorForLanguageModeling(transformers.DataCollatorForLanguag
             #     block[idx] = example[key]
             out = None
             if torch.utils.data.get_worker_info() is not None:
-                storage = elem._storage()._new_shared(len(examples) * 8 * elem.shape[0], device=elem.device)  # 8 for byte->long
-                # storage = elem.untyped_storage()._new_shared(len(examples) * 8 * elem.shape[0], device=elem.device)  # 8 for byte->long
-                # out = elem.new(storage).resize_(len(examples), elem.shape[0])
-                # storage = elem._typed_storage()._new_shared(len(examples) * elem.shape[0], device=elem.device) # this will be pytorch 2.0
+                if TORCH2:
+                    storage = elem.untyped_storage()._new_shared(len(examples) * 8 * elem.shape[0], device=elem.device)  # 8 for byte->long
+                else:
+                    storage = elem._storage()._new_shared(len(examples) * 8 * elem.shape[0], device=elem.device)  # 8 for byte->long
                 out = elem.new(storage).resize_(len(examples), elem.shape[0])
 
             batch[key] = torch.stack([example[key] for example in examples], 0, out=out).contiguous()
