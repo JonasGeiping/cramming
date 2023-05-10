@@ -198,7 +198,7 @@ class TorchEngine(torch.nn.Module):
             elapsed_hours = (time.time() - self.initial_time) / 60 / 60
             fake_step = int(elapsed_hours / self.cfg_train.budget * self.cfg_train.steps)
 
-            batch_size_step = self.cfg_train.batch_size / self.cfg_train.steps * self.cfg_train.batch_size_ramp
+            batch_size_step = self.cfg_train.batch_size / (self.cfg_train.steps * self.cfg_train.batch_size_ramp)
             mbs = self.cfg_impl.microbatch_size
             new_batch_size = min(int(fake_step * batch_size_step // mbs + 1) * mbs, self.cfg_train.batch_size)
         elif self.steps < self.cfg_train.batch_size_ramp:
