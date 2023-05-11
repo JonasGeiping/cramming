@@ -5,7 +5,8 @@ import torch
 from typing import Optional
 from transformers import PretrainedConfig, PreTrainedModel
 
-from transformers import AutoConfig, AutoModel, AutoModelForMaskedLM, AutoModelForSequenceClassification
+from transformers import (AutoConfig, AutoModel, AutoModelForMaskedLM,
+    AutoModelForTokenClassification, AutoModelForSequenceClassification)
 from omegaconf import OmegaConf
 
 
@@ -225,6 +226,7 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
 
     def __init__(self, config):
         super().__init__(config)
+        config.arch['num_labels'] = config.num_labels
         self.cfg = OmegaConf.create(config.arch)  # this could be nicer ...
         self.encoder = ScriptableLM(config)
 
@@ -235,16 +237,26 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
         self.num_labels = self.cfg.num_labels
         self._init_weights()
 
-    def _init_weights(self):
-        for name, module in self.named_modules():
+    def _init_weights(self, module=None):
+        if module:
             _init_module(
-                name,
+                None,
                 module,
                 self.cfg.init.type,
                 self.cfg.init.std,
                 self.cfg.hidden_size,
                 self.cfg.num_transformer_layers,
             )
+        else:
+            for name, module in self.named_modules():
+                _init_module(
+                    name,
+                    module,
+                    self.cfg.init.type,
+                    self.cfg.init.std,
+                    self.cfg.hidden_size,
+                    self.cfg.num_transformer_layers,
+                )
 
     def forward(
         self,
@@ -276,6 +288,85 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
             elif self.problem_type == "multi_label_classification":
                 loss_fct = torch.nn.BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)
+            else:
+                raise ValueError("Wrong problem type!")
+        else:
+            loss = logits.new_zeros((1,))
+
+        return dict(logits=logits, loss=loss)
+
+
+
+class ScriptableLMForTokenClassification(PreTrainedModel):
+    """Classification head."""
+
+    config_class = crammedBertConfig
+
+    def __init__(self, config):
+        super().__init__(config)
+        config.arch['num_labels'] = config.num_labels
+        self.cfg = OmegaConf.create(config.arch)  # this could be nicer ...
+        self.encoder = ScriptableLM(config)
+
+        self.head = torch.nn.Linear(self.cfg.hidden_size, self.cfg.num_labels)
+
+        self.problem_type = None
+        self.num_labels = self.cfg.num_labels
+        self._init_weights()
+
+    def _init_weights(self, module=None):
+        if module:
+            _init_module(
+                None,
+                module,
+                self.cfg.init.type,
+                self.cfg.init.std,
+                self.cfg.hidden_size,
+                self.cfg.num_transformer_layers,
+            )
+        else:
+            for name, module in self.named_modules():
+                _init_module(
+                    name,
+                    module,
+                    self.cfg.init.type,
+                    self.cfg.init.std,
+                    self.cfg.hidden_size,
+                    self.cfg.num_transformer_layers,
+                )
+
+    def forward(
+        self,
+        input_ids,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.Tensor] = None,
+    ):
+        logits = self.head(self.encoder(input_ids, attention_mask))
+
+        if labels is not None:
+            if self.problem_type is None:  # very much from huggingface
+                if self.cfg.num_labels == 1:
+                    self.problem_type = "regression"
+                elif self.cfg.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                    self.problem_type = "single_label_classification"
+                else:
+                    self.problem_type = "multi_label_classification"
+
+            if self.problem_type == "regression":
+                loss_fct = torch.nn.MSELoss()
+                if self.num_labels == 1:
+                    loss = loss_fct(logits.squeeze(), labels.squeeze())
+                else:
+                    loss = loss_fct(logits, labels)
+            elif self.problem_type == "single_label_classification":
+                loss_fct = torch.nn.CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.problem_type == "multi_label_classification":
+                loss_fct = torch.nn.BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels)
+            else:
+                raise ValueError("Wrong problem type!")
         else:
             loss = logits.new_zeros((1,))
 
@@ -371,3 +462,4 @@ AutoConfig.register("crammedBERT", crammedBertConfig)
 AutoModel.register(crammedBertConfig, ScriptableLM)
 AutoModelForMaskedLM.register(crammedBertConfig, ScriptableLMForPreTraining)
 AutoModelForSequenceClassification.register(crammedBertConfig, ScriptableLMForSequenceClassification)
+AutoModelForTokenClassification.register(crammedBertConfig, ScriptableLMForTokenClassification)

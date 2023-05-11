@@ -20,7 +20,7 @@ cooldown_steps: 0
 steps: 600000 # these are microbatch steps
 scheduler: budget-triangle2
 
-# Training settting:
+# Training setting:
 batch_size: 1536
 batch_size_ramp: 300000
 

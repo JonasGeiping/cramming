@@ -25,7 +25,7 @@ Setting:
 
 ## Requirements:
 * PyTorch: `torch` (at least version 1.12)
-* huggingface: `transformers`, `tokenizers`, `datasets`
+* huggingface: `transformers`, `tokenizers`, `datasets`, `evaluate`
 * `hydra-core`
 * [OPTIONAL]`deepspeed`
 * [OPTIONAL] `flash-attention`
