@@ -106,7 +106,7 @@ def prepare_pretraining_dataloader(dataset, tokenizer, cfg_train, cfg_impl):
         num_workers=num_workers,
         pin_memory=cfg_impl.pin_memory,
         drop_last=True,
-        prefetch_factor=cfg_impl.prefetch_factor if num_workers > 0 else 2,
+        prefetch_factor=cfg_impl.prefetch_factor if num_workers > 0 else None,
         persistent_workers=cfg_impl.persistent_workers if num_workers > 0 else False,
         collate_fn=collate_fn,
     )
