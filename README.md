@@ -124,7 +124,7 @@ python eval.py eval=rte name=NAME_OF_PRETRAINING_RUN eval.checkpoint=latest
 
 Sanity check for distributed code on CPU:
 ```
-torchrun --nproc_per_node=4 --standalone  pretrain.py name=speedtest1 dryrun=True data=sanity-check-2  impl.backend=gloo
+CUDA_VISIBLE_DEVICES= torchrun --nproc_per_node=2 --standalone  pretrain.py name=cpu_multi_check dryrun=True data=sanity-check-2  impl.dist_backend=gloo impl.fullgraph=false impl._inductor_vars.triton.cudagraphs=False
 ```
 
 Additional examples for recipes can be found in the `/scripts` folder.
