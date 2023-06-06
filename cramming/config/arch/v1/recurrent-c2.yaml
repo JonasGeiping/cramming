@@ -1,4 +1,5 @@
 # Instantiates a (non-huggingface) scriptable encoder-based LM with BERT as baseline
+# This is a depth-recurrent architecture
 
 # These are the huggingface bert parameters
 architectures:

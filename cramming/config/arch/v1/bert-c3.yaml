@@ -1,12 +1,11 @@
 # Instantiates a (non-huggingface) scriptable encoder-based LM with BERT as baseline
+# Version 3 of changes to BERT architecture
 
 # These are the huggingface bert parameters
 architectures:
-  - ScriptableFunnelLM
+  - ScriptableMaskedLM
 
-setup: [128, 64, 32, 16, 8, 4, 2, 4, 8, 16, 32, 64, 128]
 num_transformer_layers: 12
-
 hidden_size: 768
 intermed_size: 3072
 hidden_dropout_prob: 0.1
@@ -18,9 +17,11 @@ nonlin: GELU
 
 tie_weights: True # Tie input/output embedding
 sparse_prediction: True # Whether to predict only on masked tokens
-decoder_bias: True # Whether to include a bias in the decoding step
+decoder_bias: False # Whether to include a bias in the decoding step
 loss: cross-entropy
 z_loss_factor: 0
+gradient_checkpointing: False
+layer_fusion: True # Fuse transformer layer residual structure
 
 embedding:
   vocab_size: # will be populated automatically
@@ -32,7 +33,7 @@ embedding:
   normalization: True
 
 attention:
-  type: funnel
+  type: self-attention
   causal_attention: False
   num_attention_heads: 12
   dropout_prob: 0.1
@@ -51,9 +52,14 @@ init:
   std: 0.02
 
 # Very experimental options:
-skip_head_transform: False # This is only possible if embedding_dim=hidden_size
+ffn_layer_frequency: 1 # FFN layer in every layer
+deepnorm_scaling: False
+skip_head_transform: True # This is only possible if embedding_dim=hidden_size
+layer_drop_theta: # Set to a non-null value to dynamically drop layers
 use_bias: True # Whether to learn biases on all dense layers
 final_norm: False # Add a final norm layer before the end
+recurrent_layers:
+layer_macro_type: transformer # can also be FLASH
 
 # Downstream settings:
 num_labels: # This can be automatically filled in for downstream
