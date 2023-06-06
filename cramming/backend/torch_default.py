@@ -101,10 +101,6 @@ class TorchEngineMinimal(torch.nn.Module):
             self.model = self._init_distributed(model)
         else:
             self.model = model
-        try:
-            self.forward_attention_masks = model.cfg.attention.causal_attention
-        except (AttributeError, ValueError):
-            self.forward_attention_masks = False
 
         self.optimizer, self.scheduler = _load_optimizer(model, cfg_train, cfg_impl)
         self.initial_time = time.time()
