@@ -212,7 +212,7 @@ def find_pretrained_checkpoint(cfg, downstream_classes=None):
 
     if checkpoint_name is not None:
         # Load these checkpoints locally, might not be a huggingface model
-        tokenizer = tokenizer = transformers.AutoTokenizer.from_pretrained(checkpoint_name)
+        tokenizer = transformers.AutoTokenizer.from_pretrained(checkpoint_name)
         with open(os.path.join(checkpoint_name, "model_config.json"), "r") as file:
             cfg_arch = OmegaConf.create(json.load(file))  # Could have done pure hydra here, but wanted interop
 
