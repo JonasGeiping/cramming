@@ -1,5 +1,6 @@
 """Basic training backend for normal pytorch training."""
 import torch
+import torch._inductor.utils
 
 import os
 import json
@@ -9,20 +10,21 @@ from functools import partial
 import time
 
 import transformers
-
+from safetensors.torch import load_file, save_file, _remove_duplicate_names
+from transformers.utils.generic import working_or_temp_dir
 
 from torch.distributed.optim import ZeroRedundancyOptimizer
 
-from .utils import group_parameters, prepare_pretraining_dataloader, torchdynamo_compile_method, update_ema, updated_latest_weight_average
+from .utils import group_parameters, prepare_pretraining_dataloader, update_ema, updated_latest_weight_average
 from .optimizers.schedulers import get_schedule_fn
-from .optimizers import Adahessian, Shampoo, LARS, SAM, ProgressiveBatching
+from .optimizers import Adahessian, AdamWScale, Shampoo, LARS, SAM, ProgressiveBatching, AGD, Sophia
 
 log = logging.getLogger(__name__)
 _default_setup = dict(device=torch.device("cpu"), dtype=torch.float)
 
 import warnings
 
-warnings.filterwarnings("ignore", "Detected call of ", UserWarning)  # Using a scheduler differently than pytorch
+warnings.filterwarnings("ignore", "Detected call of ", UserWarning)  # schedulers are deliberately used differently
 
 
 def initialize_torch(model, dataset, tokenizer, cfg_train, cfg_impl, setup=_default_setup):
@@ -32,16 +34,25 @@ def initialize_torch(model, dataset, tokenizer, cfg_train, cfg_impl, setup=_defa
     else:
         dataloader = None
 
-    model_engine = TorchEngine(model, cfg_train, cfg_impl, setup=setup, seq_length=tokenizer.model_max_length)
+    # in most cases we can use a simpler Engine class:
+    require_full_engine = "sequence_curriculum" in cfg_train or "weight_averaging" in cfg_train or "gradinit" in cfg_train
+
+    if require_full_engine:
+        model_engine = TorchEngineFull(model, cfg_train, cfg_impl, setup=setup, seq_length=tokenizer.model_max_length)
+    else:
+        model_engine = TorchEngineMinimal(model, cfg_train, cfg_impl, setup=setup, seq_length=tokenizer.model_max_length)
     model_engine.train()
     return model_engine, model_engine.optimizer, model_engine.scheduler, dataloader
 
 
-class TorchEngine(torch.nn.Module):
-    """This class mirrors deepspeed functionality."""
+class TorchEngineMinimal(torch.nn.Module):
+    """This class mirrors deepspeed functionality. Not all changes are implemented in this version.
+
+    See TorchEngineFull for more modifications.
+    """
 
     def __init__(self, model, cfg_train, cfg_impl, setup=_default_setup, seq_length=128):
-        """Load Engine. This is the bare minimum init. The model is further traced if required."""
+        """Load Engine. The model will be compiled by default."""
         super().__init__()
 
         self.cfg_train = cfg_train
@@ -50,6 +61,7 @@ class TorchEngine(torch.nn.Module):
             self.cfg_impl.microbatch_size = self.cfg_train.batch_size
         if self.cfg_impl.microbatch_size > self.cfg_train.batch_size:
             raise ValueError(f"MBS is {self.cfg_impl.microbatch_size}, but BS is only {self.cfg_train.batch_size}.")
+        self.current_seq_length = seq_length
 
         # Mixed Precision:
         enabled = self.cfg_impl.mixed_precision if setup["device"].type != "cpu" else False
@@ -68,34 +80,23 @@ class TorchEngine(torch.nn.Module):
         self.accumulated_samples = 0  # Record the number of samples seen, reset after triggering gradient update
         self.steps = 0  # Record the number of times "step" has been triggered
 
-        # Optional sequence curriculum:
-        self.sequence_curriculum = "sequence_curriculum" in cfg_train
-        self.data_seq_length = seq_length
-        self.current_seq_length = seq_length if not self.sequence_curriculum else cfg_train.sequence_curriculum.lengths[0]
-        self.sequence_unfold = None if not self.sequence_curriculum else cfg_train.sequence_curriculum.unfold
-
-        # Optional EMA/LAWA-type weight averages
-        if "weight_averaging" in cfg_train:
-            self.weight_averaging_frequency = cfg_train.weight_averaging.frequency
-            self.weight_averaging = cfg_train.weight_averaging
-            if self.weight_averaging.type == "EMA":
-                self.param_store = [p.detach().clone() for p in model.parameters()]  # keep on CPU
-                self.buffer_store = [b.detach().clone() for b in model.buffers()]
-            else:
-                self.store = []
-        else:
-            self.weight_averaging_frequency = 0
-
         # Choose setup and move model
         self.setup = setup
         model.to(**self.setup)
 
-        # torchdynamo tracing?
-        # Ideally would be able to compile the entire .step eventually
-        self.forward = torchdynamo_compile_method(self.forward, cfg_impl.optimizer_context)
+        from ..utils import flatten
 
-        # Old-school tracing?
-        model = self._script_model(model)
+        model = torch.compile(
+            model,
+            mode=self.cfg_impl.mode,
+            dynamic=self.cfg_impl.dynamic,
+            fullgraph=self.cfg_impl.fullgraph,
+            backend=self.cfg_impl.backend,
+            disable=not cfg_impl.compile_torch,
+            # detailed options; cannot be given at the same time as mode:
+            options=flatten(cfg_impl._inductor_vars, parent_key="", sep=".") if cfg_impl._inductor_vars is not None else None,
+        )
+
         if torch.distributed.is_initialized():
             self.model = self._init_distributed(model)
         else:
@@ -121,7 +122,6 @@ class TorchEngine(torch.nn.Module):
             for k, v in batch.items()
             if k in keys  # Add more keywords here if needed
         }
-        self.set_sequence_curriculum_(device_batch)
         return device_batch
 
     def forward(self, *inputs, **kwargs):
@@ -155,41 +155,12 @@ class TorchEngine(torch.nn.Module):
             self.scaler.update()
             self.optimizer.zero_grad()
             self.schedule_batch_size()
-            self.schedule_curriculum()
-            self.moving_average_computation()
         self.scheduler.step()  # Trigger in every step, otherwise things get annoying with grad accumulation
 
     def set_train_batch_size(self, batch_size):
         """Allow dynamic modifications of batch size."""
         self.current_batch_size = batch_size
         self.accumulation_steps_expected = self.current_batch_size // self.cfg_impl.microbatch_size
-
-    def set_sequence_curriculum_(self, device_batch):
-        """Assume huggingface data is B S"""
-        if self.sequence_curriculum:
-            for key, tensor in device_batch.items():
-                if self.sequence_unfold:
-                    device_batch[key] = tensor.view(-1, self.current_seq_length)
-                else:
-                    device_batch[key] = tensor[:, : self.current_seq_length].clone()
-
-    def record_batch_size(self):
-        if self.cfg_train.optim_mod.name != "progressive-batching":
-            return self.current_batch_size
-        else:
-            return self.optimizer.last_full_step_accumulation * self.current_batch_size
-
-    def record_tokens_per_step(self):
-        """Tokens in each microbatch step."""
-        if not self.sequence_curriculum:
-            return self.current_seq_length * self.cfg_impl.microbatch_size
-        else:
-            if self.sequence_unfold:
-                # Same number of tokens in this case:
-                return self.current_seq_length * (self.data_seq_length // self.current_seq_length) * self.cfg_impl.microbatch_size
-            else:
-                # Reduced number of tokens here:
-                return self.current_seq_length * self.cfg_impl.microbatch_size
 
     def schedule_batch_size(self):
         """Optionally implement linear batch size ramp-ups."""
@@ -199,6 +170,7 @@ class TorchEngine(torch.nn.Module):
             fake_step = int(elapsed_hours / self.cfg_train.budget * self.cfg_train.steps)
 
             batch_size_step = self.cfg_train.batch_size / (self.cfg_train.steps * self.cfg_train.batch_size_ramp)
+
             mbs = self.cfg_impl.microbatch_size
             new_batch_size = min(int(fake_step * batch_size_step // mbs + 1) * mbs, self.cfg_train.batch_size)
         elif self.steps < self.cfg_train.batch_size_ramp:
@@ -209,6 +181,202 @@ class TorchEngine(torch.nn.Module):
         else:
             new_batch_size = self.cfg_train.batch_size
         self.set_train_batch_size(new_batch_size)
+
+    def record_batch_size(self):
+        if self.cfg_train.optim_mod.name != "progressive-batching":
+            return self.current_batch_size
+        else:
+            return self.optimizer.last_full_step_accumulation * self.current_batch_size
+
+    def record_tokens_per_step(self):
+        """Tokens in each microbatch step."""
+        return self.current_seq_length * self.cfg_impl.microbatch_size
+
+    @torch.no_grad()
+    def retrieve_model_state_dict(self):
+        if self.cfg_impl.compile_torch:
+            if torch.distributed.is_initialized():
+                state_dict = self.model.module._orig_mod.state_dict()  # ughhhh
+            else:
+                state_dict = self.model._orig_mod.state_dict()  # ugh
+        else:
+            if torch.distributed.is_initialized():
+                state_dict = self.model.module.state_dict()
+            else:
+                state_dict = self.model.state_dict()
+        to_removes = _remove_duplicate_names(state_dict)
+        metadata = None
+        for kept_name, to_remove_group in to_removes.items():
+            for to_remove in to_remove_group:
+                if metadata is None:
+                    metadata = {}
+
+                if to_remove not in metadata:
+                    # Do not override user data
+                    metadata[to_remove] = kept_name
+                del state_dict[to_remove]
+        state_dict = {k: v.contiguous() for k, v in state_dict.items()}
+        return state_dict
+
+    def _init_distributed(self, model):
+        model = torch.nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[self.setup["device"]] if self.setup["device"].type == "cuda" else None,
+            output_device=self.setup["device"] if self.setup["device"].type == "cuda" else None,
+            broadcast_buffers=self.cfg_impl.broadcast_buffers,
+            bucket_cap_mb=self.cfg_impl.bucket_cap_mb,
+            gradient_as_bucket_view=self.cfg_impl.gradient_as_bucket_view,
+            static_graph=self.cfg_impl.static_graph,
+        )
+        return model
+
+    def load_checkpoint(self, cfg_arch, file, skip_optim_state=True):
+        """Load list of states from checkpoint file. Not generally compatible with any other engine?"""
+        if file.startswith("hf://"):
+            if file.endswith("-untrained"):
+                log.info("Loading NO pretrained model as a sanity check ...")
+            else:
+                self.model = self.model.from_pretrained(file.split("hf://")[1], config=cfg_arch).to(**self.setup)
+                # reinit optimizer:
+                self.optimizer, self.scheduler = _load_optimizer(self.model, self.cfg_train, self.cfg_impl)
+        else:
+            if not skip_optim_state:
+                optim_state, model_state, scheduler_state, _ = load_file(file, device=self.setup["device"].type)
+                self.model.load_state_dict(model_state).to(**self.setup)
+                self.optimizer.load_state_dict(optim_state)
+                self.scheduler.load_state_dict(scheduler_state)
+            else:
+                model_state = load_file(file, device=self.setup["device"].type)
+                try:
+                    sanitized_state = {}
+                    for k, v in model_state.items():
+                        if k.startswith("module."):
+                            k = k[7:]
+                        sanitized_state[k] = v
+                    self.model.load_state_dict(sanitized_state, strict=True)
+                except RuntimeError as e:
+                    log.info(f"State dict difference is {str(e).split('Error(s) in loading state_dict for')[1]}... Ok?")
+                    self.model.load_state_dict(sanitized_state, strict=False)
+                self.model.to(**self.setup)
+
+    def save_final_model(self, base_directory, identifier, tokenizer, cfg_arch, dryrun=False):
+        """This checkpoint can be used for downstream tasks.
+        The default behavior is to save this checkpoint to a checkpoints folder under base_directory/name/checkpoints"""
+        try:
+            identifier_str = f"{identifier:2.4f}"
+        except ValueError:
+            identifier_str = str(identifier)
+        full_path = os.path.join(base_directory, "checkpoints", identifier_str)
+        os.makedirs(full_path, exist_ok=True)
+        # This saves tokenizer_config.json, tokenizer.json and special_tokens_map.json to this folder
+        if not dryrun:
+            tokenizer.save_pretrained(full_path)
+            # Save model.safetensors, model_config.json
+            save_file(self.retrieve_model_state_dict(), os.path.join(full_path, "model.safetensors"))
+            # legacy save: torch.save(self.retrieve_model_state_dict(), os.path.join(full_path, "model.pth"))
+            with open(os.path.join(full_path, "model_config.json"), "w") as file:
+                json.dump(OmegaConf.to_container(cfg_arch, resolve=True), file)
+
+    def push_to_hub(self, tokenizer, cfg, dryrun=False):
+        """Analogous to save_final_model, but save model to hugginface hub."""
+        from huggingface_hub import HfApi
+        from io import BytesIO
+
+        api = HfApi()
+
+        if not dryrun:
+            log.info(f"Pushing model to hub repository {cfg.impl.hf_directoy_name}.")
+            final_state_dict = self.retrieve_model_state_dict()
+            self.model.load_state_dict(final_state_dict)
+
+            # Push model with safetensors:
+            # This is a manual modification of model.push_to_hub which doesn't support safetensors yet
+            repo_id = cfg.impl.hf_directoy_name
+            if os.path.isdir(repo_id):
+                working_dir = repo_id
+                repo_id = repo_id.split(os.path.sep)[-1]
+            else:
+                working_dir = repo_id.split("/")[-1]
+            repo_id = self.model._create_repo(repo_id)
+            use_temp_dir = not os.path.isdir(working_dir)
+            with working_or_temp_dir(working_dir=working_dir, use_temp_dir=use_temp_dir) as work_dir:
+                files_timestamps = self.model._get_files_timestamps(work_dir)
+                # Save all files.
+                self.model.save_pretrained(work_dir, max_shard_size="10GB", safe_serialization=True)
+                self.model._upload_modified_files(
+                    work_dir,
+                    repo_id,
+                    files_timestamps,
+                    commit_message=commit_message,
+                    token=use_auth_token,
+                    create_pr=create_pr,
+                )
+            # Push tokenizer:
+            tokenizer.push_to_hub(cfg.impl.hf_directoy_name)
+            # Push config files:
+            for config_group, config_name in zip([cfg.arch, cfg.data, cfg.train], ["arch", "data", "train"]):
+                buffer = BytesIO()
+                buffer.write(json.dumps(OmegaConf.to_container(config_group, resolve=True), indent=4).encode())
+                api.upload_file(
+                    path_or_fileobj=buffer,
+                    path_in_repo=f"{config_name}_budget_hours_{cfg.budget}.json",
+                    repo_id=f"{api.whoami()['name']}/{cfg.impl.hf_directoy_name}",  # there has to be a better way to do this, but ...
+                    repo_type="model",
+                )
+        else:
+            log.info(f"Skipping huggingface upload in dryrun state. Would upload to {cfg.impl.hf_directoy_name}.")
+
+
+class TorchEngineFull(TorchEngineMinimal):
+    """This class mirrors deepspeed functionality. Not all changes are implemented in this version.
+
+    See TorchEngineFull for more modifications.
+    """
+
+    def __init__(self, model, cfg_train, cfg_impl, setup=_default_setup, seq_length=128):
+        """Load Engine. The model will be compiled by default."""
+        super().__init__(model, cfg_train, cfg_impl, setup, seq_length)
+
+        # Optional sequence curriculum:
+        self.sequence_curriculum = "sequence_curriculum" in cfg_train
+        self.data_seq_length = seq_length
+        self.current_seq_length = seq_length if not self.sequence_curriculum else cfg_train.sequence_curriculum.lengths[0]
+        self.sequence_unfold = None if not self.sequence_curriculum else cfg_train.sequence_curriculum.unfold
+
+        # Optional EMA/LAWA-type weight averages
+        if "weight_averaging" in cfg_train:
+            self.weight_averaging_frequency = cfg_train.weight_averaging.frequency
+            self.weight_averaging = cfg_train.weight_averaging
+            if self.weight_averaging.type == "EMA":
+                self.param_store = [p.detach().clone() for p in model.parameters()]  # keep on CPU
+                self.buffer_store = [b.detach().clone() for b in model.buffers()]
+            else:
+                self.store = []
+        else:
+            self.weight_averaging_frequency = 0
+        self.initial_time = time.time()
+
+    def optimizer_step(self):
+        """Requires a scheduler that is based on iterations instead of epochs."""
+        super().optimizer_step()
+        if self.accumulated_samples >= self.current_batch_size:
+            self.schedule_curriculum()
+            self.moving_average_computation()
+
+    def to_device(self, batch: dict[str, torch.Tensor], keys: list[str] = ["input_ids", "labels"]):
+        """Move batch of data into device memory."""
+        device_batch = super().to_device(batch)
+        self.set_sequence_curriculum_(device_batch)
+        return device_batch
+
+    def set_sequence_curriculum_(self, device_batch):
+        """Assume huggingface data is B S"""
+        if self.sequence_curriculum:
+            for key, tensor in device_batch.items():
+                if self.sequence_unfold:
+                    device_batch[key] = tensor.view(-1, self.current_seq_length)
+                else:
+                    device_batch[key] = tensor[:, : self.current_seq_length].clone()
 
     def schedule_curriculum(self):
         """Optionally implement linear sequence lengths curriculum."""
@@ -224,6 +392,18 @@ class TorchEngine(torch.nn.Module):
             for trigger, length in zip(triggers, lengths):
                 if fraction_elapsed > trigger:
                     self.current_seq_length = length
+
+    def record_tokens_per_step(self):
+        """Tokens in each microbatch step."""
+        if not self.sequence_curriculum:
+            return self.current_seq_length * self.cfg_impl.microbatch_size
+        else:
+            if self.sequence_unfold:
+                # Same number of tokens in this case:
+                return self.current_seq_length * (self.data_seq_length // self.current_seq_length) * self.cfg_impl.microbatch_size
+            else:
+                # Reduced number of tokens here:
+                return self.current_seq_length * self.cfg_impl.microbatch_size
 
     def moving_average_computation(self):
         if self.weight_averaging_frequency > 0:
@@ -250,62 +430,6 @@ class TorchEngine(torch.nn.Module):
             # Else use normal state dict
             return self.model.state_dict()
 
-    def _init_distributed(self, model):
-        model = torch.nn.parallel.DistributedDataParallel(
-            model,
-            device_ids=[self.setup["device"]] if self.setup["device"].type == "cuda" else None,
-            output_device=self.setup["device"] if self.setup["device"].type == "cuda" else None,
-            broadcast_buffers=self.cfg_impl.broadcast_buffers,
-            bucket_cap_mb=self.cfg_impl.bucket_cap_mb,
-            gradient_as_bucket_view=self.cfg_impl.gradient_as_bucket_view,
-            static_graph=self.cfg_impl.static_graph,
-        )
-        return model
-
-    def _script_model(self, model):
-        if self.cfg_impl.jit == "trace":
-            with torch.autocast(**self.amp_settings):
-                # No guarantees for complicated models
-                input_setup = dict(dtype=torch.long, device=self.setup["device"])
-                templates = torch.randint(0, model.vocab_size, (*self.cfg_impl.trace_shape,), **input_setup)
-                labels = torch.randint(0, model.vocab_size, (*self.cfg_impl.trace_shape,), **input_setup)
-
-                model = torch.jit.trace(_ModelArgWrapper(model), (templates, labels), strict=False)
-        elif self.cfg_impl.jit == "script":
-            # This does not work for huggingface models
-            model = torch.jit.script(model)
-        return model
-
-    def load_checkpoint(self, cfg_arch, file, skip_optim_state=True):
-        """Load list of states from checkpoint file. Not generally compatible with any other engine?"""
-        if file.startswith("hf://"):
-            if file.endswith("-untrained"):
-                log.info("Loading NO pretrained model as a sanity check ...")
-            else:
-                self.model = self.model.from_pretrained(file.split("hf://")[1], config=cfg_arch).to(**self.setup)
-                # reinit optimizer:
-                self.optimizer, self.scheduler = _load_optimizer(self.model, self.cfg_train, self.cfg_impl)
-        else:
-            if not skip_optim_state:
-                optim_state, model_state, scheduler_state, _ = torch.load(file, map_location=self.setup["device"])
-                self.model.load_state_dict(model_state).to(**self.setup)
-                self.optimizer.load_state_dict(optim_state)
-                self.scheduler.load_state_dict(scheduler_state)
-            else:
-
-                model_state = torch.load(file, map_location=self.setup["device"])
-                try:
-                    sanitized_state = {}
-                    for k, v in model_state.items():
-                        if k.startswith("module."):
-                            k = k[7:]
-                        sanitized_state[k] = v
-                    self.model.load_state_dict(sanitized_state, strict=True)
-                except RuntimeError as e:
-                    log.info(f"State dict difference is {str(e).split('Error(s) in loading state_dict for')[1]}... Ok?")
-                    self.model.load_state_dict(sanitized_state, strict=False)
-                self.model.to(**self.setup)
-
     def save_training_checkpoint(self, identifier, directory="checkpoints", state=None):
         """Path, identifier and additional client state. This checkpoint can be used to resume training.
         The default behavior is to save this checkpoint relative to the training working directory.
@@ -314,56 +438,13 @@ class TorchEngine(torch.nn.Module):
             identifier_str = f"{identifier:2.4f}"
         except ValueError:
             identifier_str = str(identifier)
-        file = os.path.join(directory, f"{identifier:2.4f}.pth")
-        os.makedirs(directory, exist_ok=True)
+        file = os.path.join(directory, f"{identifier:2.4f}.safetensors")
+        os.makedirs(path, exist_ok=True)
 
         optim_state = self.optimizer.state_dict()
         model_state = self.retrieve_model_state_dict()
         scheduler_state = self.scheduler.state_dict()
-        torch.save([optim_state, model_state, scheduler_state, state], file)
-
-    def save_final_model(self, base_directory, identifier, tokenizer, cfg_arch, dryrun=False):
-        """This checkpoint can be used for downstream tasks.
-        The default behavior is to save this checkpoint to a checkpoints folder under base_directory/name/checkpoints"""
-        try:
-            identifier_str = f"{identifier:2.4f}"
-        except ValueError:
-            identifier_str = str(identifier)
-        full_path = os.path.join(base_directory, "checkpoints", identifier_str)
-        os.makedirs(full_path, exist_ok=True)
-        # This saves tokenizer_config.json, tokenizer.json and special_tokens_map.json to this folder
-        if not dryrun:
-            tokenizer.save_pretrained(full_path)
-            # Save model.pth, model_config.json
-            torch.save(self.retrieve_model_state_dict(), os.path.join(full_path, "model.pth"))
-            with open(os.path.join(full_path, "model_config.json"), "w") as file:
-                json.dump(OmegaConf.to_container(cfg_arch, resolve=True), file)
-
-    def push_to_hub(self, tokenizer, cfg, dryrun=False):
-        """Analogous to save_final_model, but save model to hugginface hub."""
-        from huggingface_hub import HfApi
-        from io import BytesIO
-
-        api = HfApi()
-
-        if not dryrun:
-            log.info(f"Pushing model to hub repository {cfg.impl.hf_directoy_name}.")
-            final_state_dict = self.retrieve_model_state_dict()
-            self.model.load_state_dict(final_state_dict)
-            self.model.push_to_hub(cfg.impl.hf_directoy_name)
-            tokenizer.push_to_hub(cfg.impl.hf_directoy_name)
-
-            for config_group, config_name in zip([cfg.arch, cfg.data, cfg.train], ["arch", "data", "train"]):
-                buffer = BytesIO()
-                buffer.write(json.dumps(OmegaConf.to_container(config_group, resolve=True), indent=4).encode())
-                api.upload_file(
-                    path_or_fileobj=buffer,
-                    path_in_repo=f"{config_name}_budget_hours_{cfg.budget}.json",
-                    repo_id=f"{api.whoami()['name']}/{cfg.impl.hf_directoy_name}",  # there has to be a better way to do this, but ...
-                    repo_type="model",
-                )
-        else:
-            log.info(f"Skipping huggingface upload in dryrun state. Would upload to {cfg.impl.hf_directoy_name}.")
+        save_file([optim_state, model_state, scheduler_state, state], file)
 
     def gradinit(self, data_iterable, optim_cfg, gradinit_cfg):
         """Run data-based initialization search as described in Zhu et al.,
