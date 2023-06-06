@@ -259,6 +259,22 @@ class TorchEngineMinimal(torch.nn.Module):
                     self.model.load_state_dict(sanitized_state, strict=False)
                 self.model.to(**self.setup)
 
+    def save_training_checkpoint(self, identifier, directory="checkpoints", state=None):
+        """Path, identifier and additional client state. This checkpoint can be used to resume training.
+        The default behavior is to save this checkpoint relative to the training working directory.
+        """
+        try:
+            identifier_str = f"{identifier:2.4f}"
+        except ValueError:
+            identifier_str = str(identifier)
+        file = os.path.join(directory, f"{identifier:2.4f}.safetensors")
+        os.makedirs(path, exist_ok=True)
+
+        optim_state = self.optimizer.state_dict()
+        model_state = self.retrieve_model_state_dict()
+        scheduler_state = self.scheduler.state_dict()
+        save_file([optim_state, model_state, scheduler_state, state], file)
+
     def save_final_model(self, base_directory, identifier, tokenizer, cfg_arch, dryrun=False):
         """This checkpoint can be used for downstream tasks.
         The default behavior is to save this checkpoint to a checkpoints folder under base_directory/name/checkpoints"""
@@ -429,22 +445,6 @@ class TorchEngineFull(TorchEngineMinimal):
         else:
             # Else use normal state dict
             return self.model.state_dict()
-
-    def save_training_checkpoint(self, identifier, directory="checkpoints", state=None):
-        """Path, identifier and additional client state. This checkpoint can be used to resume training.
-        The default behavior is to save this checkpoint relative to the training working directory.
-        """
-        try:
-            identifier_str = f"{identifier:2.4f}"
-        except ValueError:
-            identifier_str = str(identifier)
-        file = os.path.join(directory, f"{identifier:2.4f}.safetensors")
-        os.makedirs(path, exist_ok=True)
-
-        optim_state = self.optimizer.state_dict()
-        model_state = self.retrieve_model_state_dict()
-        scheduler_state = self.scheduler.state_dict()
-        save_file([optim_state, model_state, scheduler_state, state], file)
 
     def gradinit(self, data_iterable, optim_cfg, gradinit_cfg):
         """Run data-based initialization search as described in Zhu et al.,
