@@ -1,0 +1,9 @@
+# dataset-specific settings
+axb:
+  collection: super_glue
+  regression: False
+  structure: [sentence1, sentence2]
+
+  target_metrics: [matthews_correlation]
+
+  train_data_source: rte

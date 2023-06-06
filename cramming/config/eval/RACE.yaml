@@ -1,27 +1,20 @@
 defaults:
   - optim: adam
   - tasks:
-      - cola
-      - mnli
-      - mrpc
-      - qnli
-      - qqp
-      - rte
-      - sst2
-      - stsb
-#      - wnli
+      - race
 
 optim:
-  lr: 4e-5
+  lr: 1e-5
+  weight_decay: 0.1 # roberta hyperparams
 
-name: GLUE
+name: RACE
 evaluation_set: validation # always keep this at validation except for the final run
 
 # checkpoint name:
 # This can be either "latest", or a reference to a specific checkpoint in a subfolder
 checkpoint: latest
 path: ${impl.path} # Path for caches of datasets and tokenizers
-max_seq_length: 128
+max_seq_length: 1024
 
 # Default options:
 # These can be overwritten by specific tasks

@@ -1,7 +1,7 @@
 # dataset-specific settings
-qqp:
-  collection: glue
+cb:
+  collection: super_glue
   regression: False
-  structure: [question1, question2]
+  structure: [premise, hypothesis]
 
   target_metrics: ["f1"]

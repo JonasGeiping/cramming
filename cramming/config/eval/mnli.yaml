@@ -6,6 +6,7 @@ defaults:
 optim:
   weight_decay: 0.01
 
+name: MNLI
 evaluation_set: validation # always keep this at validation except for the final run
 
 checkpoint: latest
@@ -18,7 +19,7 @@ batch_size: 32
 batch_size_ramp: 0
 
 gradient_clipping:
-limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight] # no weight decay for these layers
+limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight, norm]
 scheduler: linear
 optim_mod:
   name: none
@@ -28,7 +29,7 @@ epochs: 10
 # These options are only used for scheduling:
 warmup_steps: 0.1
 cooldown_steps: 0
-steps: 10_000
+steps:
 
 arch_modifications:
   classification_head:

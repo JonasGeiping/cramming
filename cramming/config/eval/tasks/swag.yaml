@@ -1,0 +1,18 @@
+# Dataset Summary
+# Given a partial description like "she opened the hood of the car,"
+# humans can reason about the situation and anticipate what might come next ("then, she examined the engine").
+# SWAG (Situations With Adversarial Generations) is a large-scale dataset for this task of grounded commonsense inference,
+# unifying natural language inference and physically grounded reasoning.
+#
+# The dataset consists of 113k multiple choice questions about grounded situations (73k training, 20k validation, 20k test).
+# Each question is a video caption from LSMDC or ActivityNet Captions, with four answer choices about what might happen next in the scene.
+# The correct answer is the (real) video caption for the next event in the video; the three incorrect answers are adversarially generated
+# and human verified, so as to fool machines but not humans. SWAG aims to be a benchmark for evaluating grounded commonsense NLI
+# and for learning representations.
+
+regular:
+  collection: swag
+  regression: False
+  structure: [startphrase, ending0, ending1, ending2, ending3]
+
+  target_metrics: [accuracy]

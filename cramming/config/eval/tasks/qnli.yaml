@@ -3,3 +3,5 @@ qnli:
   collection: glue
   regression: False
   structure: [question, sentence]
+
+  target_metrics: [accuracy]

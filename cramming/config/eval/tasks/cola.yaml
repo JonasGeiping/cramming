@@ -2,4 +2,6 @@
 cola:
   collection: glue
   regression: False
-  structure: [sentence, null]
+  structure: [sentence]
+
+  target_metrics: [matthews_correlation]

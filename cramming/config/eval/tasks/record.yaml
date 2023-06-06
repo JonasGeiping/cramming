@@ -1,0 +1,7 @@
+# dataset-specific settings
+record:
+  collection: super_glue
+  regression: False
+  structure: [query, passage]
+
+  target_metrics: ["accuracy"]
