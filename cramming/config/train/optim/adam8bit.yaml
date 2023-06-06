@@ -1,4 +1,4 @@
-type: RAdam
+type: Adam8bit
 
 lr: 0.0005
 betas:
@@ -6,3 +6,4 @@ betas:
   - 0.98
 eps: 1e-12
 weight_decay: 0.01
+amsgrad: False

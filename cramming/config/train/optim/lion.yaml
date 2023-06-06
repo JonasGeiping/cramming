@@ -1,0 +1,8 @@
+type: Lion
+
+lr: 1e-4
+betas:
+  - 0.9
+  - 0.99
+# use 0.95, 0.98 if unstable
+weight_decay: 0.1

@@ -1,7 +1,7 @@
-# Basic hyperparameter for normal BERT pretraining
-# working hard here to separate "impl" implementation details and "train" abstract hyperparameters
+# Version 4 of changes to bert training hyperparameters
+# Optimizes MLM rate for torch.compile, includes improved weight decay limitation, finally updated to a relative bs ramp
 
-name: bert-o3
+name: bert-o4
 
 defaults:
   - optim: adam
@@ -9,10 +9,9 @@ defaults:
 
 optim:
   lr: 1e-3
-  eps: 1e-12
   weight_decay: 0.01
 
-limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight] # no weight decay for these layers
+limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight, norm] # no weight decay for these layers
 
 # steps:
 warmup_steps: 0
@@ -20,32 +19,34 @@ cooldown_steps: 0
 steps: 600000 # these are microbatch steps
 scheduler: budget-triangle2
 
-# Training setting:
-batch_size: 1536
-batch_size_ramp: 300000
+# Training settting:
+batch_size: 8192
+batch_size_ramp: 0.60
 
 gradient_clipping: 0.5
 pretrain_in_train_mode: False # default BERT trains with dropout layers enabled in pretrain
 
 objective:
   name: masked-lm
-  mlm_probability: 0.15
+  mlm_probability: 0.25 # leads to mbs * seq_length * prob = 4096 masked entries, for mbs=128, seq=128
+  # Use 0.25 for mbs=64 and 0.16666 for mbs=96, at least this many sixes to round up to 2048
+  # f = lambda x: pow(2, math.ceil(math.log(x)/math.log(2)))
+  # f(mbs * seq * 0.15) / mbs / seq
   use_80_20_rule: True
   disable_mlm: False
   token_drop: 0.0
 reverse_dataset_order: False
 
 budget: ${budget}
-
-gradinit:
-  enabled: False
-  # eta: 1.0
-  # tau: 1e-3 # step size
-  # steps: 50
-  # min_scale: 1e-3
-  # max_scale: 1e3
-  # step_type: sign-grad # sign-grad or grad
-  # second_order: False
+# gradinit:
+#   enabled: False
+# eta: 1.0
+# tau: 1e-3 # step size
+# steps: 50
+# min_scale: 1e-3
+# max_scale: 1e3
+# step_type: sign-grad # sign-grad or grad
+# second_order: False
 # sequence_curriculum:
 #   lengths: [8,16,32,64,128]
 #   triggers: [0.1,0.2,0.3,0.5,0.75]
