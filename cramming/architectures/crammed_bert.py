@@ -7,7 +7,7 @@ Not all modifications discussed in the paper are implemented in this version, fo
 """
 import torch
 from transformers import PretrainedConfig, PreTrainedModel
-from transformers import AutoConfig, AutoModel, AutoModelForMaskedLM, AutoModelForSequenceClassification
+from transformers import AutoConfig, AutoModel, AutoModelForMaskedLM, AutoModelForSequenceClassification, AutoModelForTokenClassification
 
 from typing import Optional
 from omegaconf import OmegaConf
@@ -174,9 +174,12 @@ class ScriptableLMForPreTraining(PreTrainedModel):
         self.loss_fn = torch.nn.CrossEntropyLoss()
         self.sparse_prediction = self.cfg.sparse_prediction
 
-        for name, module in self.named_modules():
+        self._init_weights()
+
+    def _init_weights(self, module=None):
+        modules = self.modules() if module is None else [module]
+        for module in modules:
             _init_module(
-                name,
                 module,
                 self.cfg.init.type,
                 self.cfg.init.std,
@@ -241,9 +244,12 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
         self.problem_type = None
         self.num_labels = self.cfg.num_labels
 
-        for name, module in self.named_modules():
+        self._init_weights()
+
+    def _init_weights(self, module=None):
+        modules = self.modules() if module is None else [module]
+        for module in modules:
             _init_module(
-                name,
                 module,
                 self.cfg.init.type,
                 self.cfg.init.std,
@@ -301,9 +307,12 @@ class ScriptableLMForSCRIPTTraining(PreTrainedModel):
         self.sparse_prediction = self.cfg.sparse_prediction
         assert self.sparse_prediction
 
-        for name, module in self.named_modules():
+        self._init_weights()
+
+    def _init_weights(self, module=None):
+        modules = self.modules() if module is None else [module]
+        for module in modules:
             _init_module(
-                name,
                 module,
                 self.cfg.init.type,
                 self.cfg.init.std,
@@ -373,9 +382,70 @@ class ScriptableLMForSCRIPTTraining(PreTrainedModel):
         return -torch.log(-torch.log(noise + eps) + eps)
 
 
+class ScriptableLMForTokenClassification(PreTrainedModel):
+    """Classification head without pooling."""
+
+    config_class = crammedBertConfig
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.cfg = OmegaConf.create(config.arch)
+
+        self.encoder = ScriptableLM(config)
+        self.head = torch.nn.Linear(self.cfg.classification_head.head_dim, self.cfg.num_labels)
+
+        self.problem_type = None
+        self.num_labels = self.cfg.num_labels
+
+        self._init_weights()
+
+    def _init_weights(self, module=None):
+        modules = self.modules() if module is None else [module]
+        for module in modules:
+            _init_module(
+                module,
+                self.cfg.init.type,
+                self.cfg.init.std,
+                self.cfg.hidden_size,
+                self.cfg.num_transformer_layers,
+            )
+
+    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
+        logits = self.head(self.encoder(input_ids, attention_mask))
+
+        if labels is not None:
+            if self.problem_type is None:  # very much from huggingface
+                if self.cfg.num_labels == 1:
+                    self.problem_type = "regression"
+                elif self.cfg.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                    self.problem_type = "single_label_classification"
+                else:
+                    self.problem_type = "multi_label_classification"
+
+            if self.problem_type == "regression":
+                loss_fct = torch.nn.MSELoss()
+                if self.num_labels == 1:
+                    loss = loss_fct(logits.squeeze(), labels.squeeze())
+                else:
+                    loss = loss_fct(logits, labels)
+            elif self.problem_type == "single_label_classification":
+                loss_fct = torch.nn.CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.problem_type == "multi_label_classification":
+                loss_fct = torch.nn.BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels)
+            else:
+                raise ValueError("Wrong problem type!")
+        else:
+            loss = logits.new_zeros((1,))
+
+        return dict(logits=logits, loss=loss)
+
+
 # ###### HF registry here? ############### #
 
 AutoConfig.register("crammedBERT", crammedBertConfig)
 AutoModel.register(crammedBertConfig, ScriptableLM)
 AutoModelForMaskedLM.register(crammedBertConfig, ScriptableLMForPreTraining)
 AutoModelForSequenceClassification.register(crammedBertConfig, ScriptableLMForSequenceClassification)
+AutoModelForTokenClassification.register(crammedBertConfig, ScriptableLMForTokenClassification)

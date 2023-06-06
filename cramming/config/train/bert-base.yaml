@@ -9,13 +9,13 @@ defaults:
 
 limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight, norm] # no weight decay for these layers
 
-# steps:
+# Steps:
 warmup_steps: 30_000
 cooldown_steps: 0
 steps: 600_000 # these are microbatch steps
 scheduler: budget-cosine-decay
 
-# Training settting:
+# Training settings:
 batch_size: 1536
 batch_size_ramp: 0
 
@@ -31,12 +31,3 @@ objective:
 reverse_dataset_order: False
 
 budget: ${budget}
-# gradinit:
-#   enabled: False
-# eta: 1.0
-# tau: 1e-3 # step size
-# steps: 50
-# min_scale: 1e-3
-# max_scale: 1e3
-# step_type: sign-grad # sign-grad or grad
-# second_order: False
