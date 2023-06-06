@@ -1,0 +1,12 @@
+# Pile streaming from huggingface with new streaming tech :>
+# should be 1.2T in this deduplicated version
+EleutherAI/the_pile:
+  provider: huggingface
+  partition: unshuffled_deduplicated_en
+  split: train
+
+  streaming: True
+
+  # source-specific cleaning rules?
+  remove_columns:
+  concatenate_successive_entries: 0 # cannot concat when streaming

@@ -1,7 +1,7 @@
-# The wikipedia en dataset, drawn from it huggingface mirror
-c4:
+# The EleutherAI/the_pile_deduplicated
+EleutherAI/the_pile_deduplicated:
   provider: huggingface
-  name: en
+  partition:
   split: train
 
   streaming: True

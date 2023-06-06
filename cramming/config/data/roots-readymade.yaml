@@ -1,0 +1,10 @@
+# Draw a preprocessed dataset directly from my HF profile.
+# This dataset is already tokenized, you "have" to load the correct tokenizer
+name: roots-mini
+sources:
+  hub:
+    provider: hub
+hf_location: JonasGeiping/roots-mini_WordPiecex32768_2a22a1d08cbdc9685c3c795938ebebfb
+streaming: True
+
+vocab_size: 32768 # cannot be changed!

@@ -1,7 +1,7 @@
-# The wikipedia en dataset, drawn from it huggingface mirror
-c4:
+# A part of ROOTS
+bigscience-data/roots_en_ted_talks_iwslt:
   provider: huggingface
-  name: en
+  partition:
   split: train
 
   streaming: True

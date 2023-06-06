@@ -1,7 +1,7 @@
 # The wikipedia en dataset, drawn from it huggingface mirror
 wikipedia:
   provider: huggingface
-  partition: 20220301.en
+  name: 20220301.en
   split: train
 
   streaming: False

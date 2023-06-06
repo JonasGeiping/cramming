@@ -1,10 +1,10 @@
-# The wikipedia en dataset, drawn from it huggingface mirror
-c4:
+# The open webtext replication, as mirrored on HF
+openwebtext:
   provider: huggingface
-  name: en
+  partition: plain_text
   split: train
 
-  streaming: True
+  streaming: False
 
   # source-specific cleaning rules?
   remove_columns:

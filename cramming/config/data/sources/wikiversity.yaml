@@ -1,7 +1,7 @@
-# The wikipedia en dataset, drawn from it huggingface mirror
-c4:
+# A part of ROOTS
+bigscience-data/roots_en_wikiversity:
   provider: huggingface
-  name: en
+  partition:
   split: train
 
   streaming: True

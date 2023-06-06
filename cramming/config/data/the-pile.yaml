@@ -19,17 +19,17 @@ seq_length: 128
 include_cls_token_in_corpus: False
 include_sep_token_in_corpus: True
 use_type_ids: False
-max_entries_in_raw_dataset: 4e6 # About 40 mio seqs of length 128
-max_seq_in_tokenized_dataset: 35e6 # Select only this many tokenized sequences.
+max_entries_in_raw_dataset: 8e6 # About 40 mio seqs of length 128
+max_seq_in_tokenized_dataset: 85e6 # Select only this many tokenized sequences.
 # max_seq_in_tokenized_dataset should be just slightly more than budget * 60 * 60 * expected tokens/sec for the single epoch of training
 
 # Data Cleaning:
 named_entity_simplification: False
 remove_whitespaces: False
-remove_trash: False
-trash_cutoff: 0.3
+remove_trash: True
+trash_cutoff: 0.25
 deduplicate_entries: False
-deduplication_threshold: 100
+deduplication_threshold: 75
 
 # Data Order:
-ordering: randomized # could be a curriculum
+ordering: sentence-length-curriculum # could be a curriculum

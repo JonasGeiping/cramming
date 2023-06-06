@@ -2,7 +2,7 @@
 name: the_pile
 defaults:
   - sources:
-      - the_pile_natural
+      - the_pile_stream
 
 #
 # Preprocessing

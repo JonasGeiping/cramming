@@ -1,0 +1,12 @@
+# The oscar dataset, drawn from it huggingface mirror
+# should be 1.2T in this deduplicated version
+oscar:
+  provider: huggingface
+  name: unshuffled_deduplicated_en
+  split: train
+
+  streaming: True
+
+  # source-specific cleaning rules?
+  remove_columns:
+  concatenate_successive_entries: 0 # cannot concat when streaming
