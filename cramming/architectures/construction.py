@@ -1,11 +1,10 @@
 """Interface to construct models."""
 
 from .huggingface_interface import construct_huggingface_model
-from .scriptable_bert import construct_scriptable_bert
 from .funnel_transformers import construct_scriptable_funnel
 from .recurrent_transformers import construct_scriptable_recurrent
 from .sanity_check import SanityCheckforPreTraining
-from .fixed_cramlm import construct_fixed_cramlm
+from .crammed_bert import construct_crammed_bert
 
 import logging
 from ..utils import is_main_process
@@ -17,16 +16,14 @@ def construct_model(cfg_arch, vocab_size, downstream_classes=None):
     model = None
     if cfg_arch.architectures is not None:
         # attempt to solve locally
-        if "ScriptableMaskedLM" in cfg_arch.architectures:
-            model = construct_scriptable_bert(cfg_arch, vocab_size, downstream_classes)
+        if "ScriptableCrammedBERT" in cfg_arch.architectures:
+            model = construct_crammed_bert(cfg_arch, vocab_size, downstream_classes)
         elif "ScriptableFunnelLM" in cfg_arch.architectures:
             model = construct_scriptable_funnel(cfg_arch, vocab_size, downstream_classes)
         elif "ScriptableRecurrentLM" in cfg_arch.architectures:
             model = construct_scriptable_recurrent(cfg_arch, vocab_size, downstream_classes)
         elif "SanityCheckLM" in cfg_arch.architectures:
             model = SanityCheckforPreTraining(cfg_arch.width, vocab_size)
-        elif "FusedCraMLM" in cfg_arch.architectures:
-            model = construct_fixed_cramlm(cfg_arch, vocab_size, downstream_classes)
 
     if model is not None:  # Return local model arch
         num_params = sum([p.numel() for p in model.parameters()])

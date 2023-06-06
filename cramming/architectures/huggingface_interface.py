@@ -22,6 +22,8 @@ def construct_huggingface_model(cfg_arch, vocab_size, downstream_classes=None):
             configuration = OmegaConf.to_container(cfg_arch)
             configuration = transformers.BertConfig(**configuration, num_labels=downstream_classes)
         configuration.vocab_size = vocab_size
+
+        configuration.problem_type = None  # always reset this!
         model = transformers.AutoModelForSequenceClassification.from_config(configuration)
         model.vocab_size = vocab_size
     return model
