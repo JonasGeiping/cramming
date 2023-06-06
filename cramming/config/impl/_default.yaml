@@ -11,7 +11,7 @@ path: data
 defaults:
   - data_structure: from-disk # can be LMDB or RAM or None to load directly from disk
 local_staging_dir: # Optionally copy a preprocessed dataset into this folder before loading it for training
-forbid_dataset_preprocessing: False
+forbid_dataset_preprocessing: True
 temporary_corpus: False # Save data directly into local staging dir, forget after use
 max_raw_chunk_size: 1e14
 
@@ -36,15 +36,7 @@ benchmark: True # CUDNN benchmarking
 deterministic: False # This option will disable non-deterministic ops
 non_blocking: True # unblocked .to(device) handles
 tf32_allowed: True
-
-# JIT:
-jit: # Global JIT. Can be "script" (but this doesnt work for huggingface models) or "trace" (but trace does not work with AMP)
-jit_instruction_type: nvfuser-profiler
-trace_shape:
-  # If jit=trace, then this is the traced shape
-  # - ${impl.microbatch_size}
-  # - ${data.seq_length}
-no_jit_compilation: False # Optionaly disable all torch.jit calls
+matmul_precision: high
 
 # Dataloader multiprocessing
 pad_to_multiple_of: 8 # padding in dataloader during downstream
@@ -57,8 +49,8 @@ persistent_workers: True # this clashes with pin_memory in pytorch<1.7.1
 default_precision: float # needs to be a pytorch datatype
 
 # Distributed training
-backend: nccl
-sharing_strategy: file_descriptor
+dist_backend: nccl
+sharing_strategy: # file_descriptor # if no argument is given, then the OS default is picked by pytorch
 
 # Misc:
 enable_huggingface_offline_mode: False
@@ -66,6 +58,12 @@ local_rank: # This is set automatically by the system_startup
 
 push_to_huggingface_hub: False
 hf_directoy_name: "test-crammedBERT-c5" # set a clever name here!
+
+add_env_variables:
+# should be NAME: stringval
+
+# TORCHINDUCTOR_MAX_AUTOTUNE_POINTWISE
+# TORCHINDUCTOR_MAX_AUTOTUNE_GEMM
 
 # Other constants:
 # OMP_NUM_THREADS:[number_of_physical_cores]
