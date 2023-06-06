@@ -15,11 +15,10 @@ import json
 from omegaconf import OmegaConf
 
 
-from .cached_datasets import CachedDataset
 from .tokenizer_preparation import construct_tokenizer, load_tokenizer
 from .curriculum_sorting import _sort_tokenized_dataset_by_unigram, _sort_tokenized_dataset_by_token, _sort_tokenized_dataset_by_word_length
 from .deduplicate import deduplicate_huggingface_dataset
-from .utils import checksum_config, stage_dataset
+from .utils import checksum_config, stage_dataset, detailed_OSError
 
 
 log = logging.getLogger(__name__)
@@ -37,19 +36,21 @@ def load_pretraining_corpus(cfg_data, cfg_impl):
     if list(cfg_data.sources.values())[0]["provider"] == "fake":
         # Shortcut for fake data
         return _load_fake_dataset(cfg_data, list(cfg_data.sources.values())[0], path=cfg_impl.path)
+    elif list(cfg_data.sources.values())[0]["provider"] == "hub":
+        return _load_from_hub(cfg_data, data_path)
     else:
         try:
-            if cfg_impl.local_staging_dir is not None:
-                with main_process_first():
+            with main_process_first():
+                if cfg_impl.local_staging_dir is not None:
                     data_path = stage_dataset(data_path, cfg_impl.local_staging_dir)
-            # Load already processed dataset
-            tokenized_dataset = datasets.load_from_disk(data_path)
-            tokenizer = load_tokenizer(
-                os.path.join(data_path, "tokenizer"),
-                seq_length=cfg_data.seq_length,
-                vocab_size=cfg_data.vocab_size,
-                cache_dir=cfg_impl.path,
-            )
+                # Load already processed dataset
+                tokenized_dataset = datasets.load_from_disk(data_path)
+                tokenizer = load_tokenizer(
+                    os.path.join(data_path, "tokenizer"),
+                    seq_length=cfg_data.seq_length,
+                    vocab_size=cfg_data.vocab_size,
+                    cache_dir=cfg_impl.path,
+                )
         except FileNotFoundError:
             if cfg_impl.forbid_dataset_preprocessing:
                 raise ValueError(
@@ -93,16 +94,6 @@ def load_pretraining_corpus(cfg_data, cfg_impl):
 
     # Cast to tensors after loading from arrow:
     tokenized_dataset.set_format("torch")
-    # 3) Optionally load into RAM / LMDB
-    if cfg_impl.data_structure.name == "RAM":
-        tokenized_dataset = CachedDataset(tokenized_dataset, cfg_data.seq_length, cfg_data.vocab_size, num_threads)
-    elif cfg_impl.data_structure.name == "LMDB":
-        # This is only a simple seq_length-level LMDB, could be nicer to load whole blocks
-        from .lmdb_datasets import LMDBDataset
-
-        aggregate_source = "_".join(cfg_data.sources.keys())
-        full_name = f"{aggregate_source}_{cfg_data.tokenizer}_{cfg_data.seq_length}x{cfg_data.vocab_size}"
-        tokenized_dataset = LMDBDataset(tokenized_dataset, cfg_data, cfg_impl.data_structure, path=processed_dataset_dir, name=full_name)
 
     # 4) Log overviews so we always know what's going on with weird tokenization tricks
     random_sentence_idx = torch.randint(0, len(tokenized_dataset), (1,)).item()
@@ -121,53 +112,61 @@ def preprocess_dataset(cfg_data, download_path, num_threads=1, max_raw_chunk_siz
     # 1) Collect raw source datasets
     raw_datasets = []
     for name, details in cfg_data.sources.items():
+        log.info(f"Now preparing source {name}...")
         if details.provider == "huggingface":
+            hf_dataset_settings = {
+                k: v for k, v in details.items() if k in ["name", "partition", "split", "language", "date", "beam_runner"] and v is not None
+            }
             raw_dataset = datasets.load_dataset(
                 name,
-                details.partition,
-                split=details.split,
+                **hf_dataset_settings,
                 cache_dir=download_path,
                 streaming=details.streaming,
             )
-            if details.remove_columns is not None:
-                raw_dataset = raw_dataset.remove_columns(details.remove_columns)
-            if details.concatenate_successive_entries > 0:
-                raw_dataset = _concatenate_entries(raw_dataset, details.concatenate_successive_entries, num_threads=num_threads)
-            raw_datasets += [raw_dataset]
         elif details.provider == "local":
             raw_dataset = datasets.load_dataset(details.file_type, data_files=details.files, streaming=details.streaming)[details.split]
-            if details.filter is not None:
-
-                def filter_fn(entry):
-                    """Assume a metadata key 'meta' is present"""
-                    for key, values in details.filter.items():
-                        if entry["meta"][key] in values:
-                            return True
-                    return False
-
-                raw_dataset = raw_dataset.filter(filter_fn)
-            raw_datasets += [raw_dataset]
         else:
             raise ValueError(f"Invalid data provider {details.provider} given.")
 
-    # 2) Preprocess and tokenize
-    try:
-        # Fixed dataset:
-        raw_data = datasets.concatenate_datasets(raw_datasets)
-        if cfg_data.max_entries_in_raw_dataset < len(raw_data):
-            raw_data = raw_data.select(range(int(cfg_data.max_entries_in_raw_dataset)))
-    except (AttributeError, TypeError):
-        # Streaming datasets:
-        raw_data = datasets.interleave_datasets(raw_datasets)
-        raw_data = raw_data.take(int(cfg_data.max_entries_in_raw_dataset))
-        raw_data = _move_stream_to_fixed_map(raw_data, cfg_data.max_entries_in_raw_dataset, max_raw_chunk_size)
+        # remove columns that break later processing steps
+        if details.remove_columns is not None:
+            raw_dataset = raw_dataset.remove_columns(details.remove_columns)
+        # Filter?
+        if getattr(details, "filter", None) is not None:
 
+            def filter_fn(entry):
+                """Assume a metadata key 'meta' is present"""
+                for key, values in details.filter.items():
+                    if entry["meta"][key] in values:
+                        return True
+                return False
+
+            raw_dataset = raw_dataset.filter(filter_fn)
+        # move streams to fixed datasets to make everything sane (and to allow concatenation with unstreamed data)
+        if details.streaming:
+            raw_dataset = raw_dataset.take(int(cfg_data.max_entries_in_raw_dataset))
+            raw_dataset = _move_stream_to_fixed_map(raw_dataset, cfg_data.max_entries_in_raw_dataset, max_raw_chunk_size)
+        else:
+            if cfg_data.max_entries_in_raw_dataset < len(raw_dataset):
+                raw_dataset = raw_dataset.select(range(int(cfg_data.max_entries_in_raw_dataset)))
+        # concatenate dataset that were cut into pieces that are too small
+        if details.concatenate_successive_entries > 0:
+            raw_dataset = _concatenate_entries(raw_dataset, details.concatenate_successive_entries, num_threads=num_threads)
+        raw_datasets += [raw_dataset]
+
+    # 2) Preprocess and tokenize
+    raw_data = datasets.concatenate_datasets(raw_datasets)
     raw_data = raw_data.shuffle(seed=89)  # Shuffle once here so that multiproc has shards of similar size!
     # This shuffle is crucial for fast multiprocessing tokenization
-    # because datasets.map uses a contiguous sharding under the hood!
-    raw_data = raw_dataset_preprocessing(raw_data, num_threads, cfg_data)  # This is by default a no-op
+    # because datasets.map uses a contiguous sharding under the hood.
+
+    # However, we also shuffle so we can now select a smaller range:
+    if cfg_data.max_entries_in_raw_dataset < len(raw_data):
+        raw_data = raw_data.select(range(int(cfg_data.max_entries_in_raw_dataset)))
+
+    raw_data = raw_dataset_preprocessing(raw_data, num_threads, cfg_data)  # This is by default a no-op, but can be dedup, filtering...
     tokenizer = construct_tokenizer(raw_data, cfg_data, path=download_path)
-    tokenized_dataset = _huggingface_preprocessing(raw_data, tokenizer, cfg_data, num_threads=num_threads)
+    tokenized_dataset = _huggingface_preprocessing(raw_data, tokenizer, cfg_data, num_threads=num_threads)  # Tokenize, group, sort...
 
     return tokenized_dataset, tokenizer
 
@@ -175,26 +174,31 @@ def preprocess_dataset(cfg_data, download_path, num_threads=1, max_raw_chunk_siz
 def _move_stream_to_fixed_map(raw_data_streamed, max_entries_in_raw_dataset, max_raw_chunk_size=1e14):
     """Save streaming dataset to a fixed mapping-style database."""
     # I'm tired of IterableDatasets and will take the performance hit to write them out instead:
-    if max_raw_chunk_size > max_entries_in_raw_dataset:
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            datasets.Dataset.from_dict(dict(text=[v["text"] for v in raw_data_streamed])).save_to_disk(tmpdirname + "raw_data")
-            raw_data_mapped = datasets.load_from_disk(tmpdirname + "raw_data")
-        # This used to be only a move into RAM but this breaks memory later using C4:
-        # raw_data = datasets.Dataset.from_dict(dict(text=[v["text"] for v in raw_data]))
-        return raw_data_mapped
-    else:
-        with tempfile.TemporaryDirectory() as tmpdirname:
-            mapped_sets = []
-            data_in_RAM = defaultdict(list)
-            for idx, value_stream in enumerate(raw_data_streamed):
-                data_in_RAM["text"].append(value_stream["text"])
-                if ((idx + 1) % max_raw_chunk_size == 0) or ((idx - 1) == max_entries_in_raw_dataset):
-                    datasets.Dataset.from_dict(data_in_RAM).save_to_disk(tmpdirname + "raw_data" + str(idx))
-                    mapped_dataset = datasets.load_from_disk(tmpdirname + "raw_data" + str(idx))
-                    log.info(f"Saved temporary copy at idx {idx} of {max_entries_in_raw_dataset} at {tmpdirname + 'raw_data' + str(idx)}.")
-                    data_in_RAM["text"] = []
-                    mapped_sets.append(mapped_dataset)
-        return datasets.concatenate_datasets(mapped_sets)
+    try:
+        if max_raw_chunk_size > max_entries_in_raw_dataset:
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                datasets.Dataset.from_dict(dict(text=[v["text"] for v in raw_data_streamed])).save_to_disk(tmpdirname + "raw_data")
+                raw_data_mapped = datasets.load_from_disk(tmpdirname + "raw_data")
+            # This used to be only a move into RAM but this breaks memory later using C4:
+            # raw_data = datasets.Dataset.from_dict(dict(text=[v["text"] for v in raw_data]))
+            return raw_data_mapped
+        else:
+            with tempfile.TemporaryDirectory() as tmpdirname:
+                mapped_sets = []
+                data_in_RAM = defaultdict(list)
+                for idx, value_stream in enumerate(raw_data_streamed):
+                    data_in_RAM["text"].append(value_stream["text"])
+                    if ((idx + 1) % max_raw_chunk_size == 0) or ((idx - 1) == max_entries_in_raw_dataset):
+                        datasets.Dataset.from_dict(data_in_RAM).save_to_disk(tmpdirname + "raw_data" + str(idx))
+                        mapped_dataset = datasets.load_from_disk(tmpdirname + "raw_data" + str(idx))
+                        log.info(
+                            f"Saved temporary copy at idx {idx} of {max_entries_in_raw_dataset} at {tmpdirname + 'raw_data' + str(idx)}."
+                        )
+                        data_in_RAM["text"] = []
+                        mapped_sets.append(mapped_dataset)
+            return datasets.concatenate_datasets(mapped_sets)
+    except OSError as e:
+        detailed_OSError(e)
 
 
 def _huggingface_preprocessing(raw_dataset, tokenizer, cfg_data, num_threads=4):
@@ -220,14 +224,17 @@ def _huggingface_preprocessing(raw_dataset, tokenizer, cfg_data, num_threads=4):
     if num_threads > 0:
         os.environ["TOKENIZERS_PARALLELISM"] = "false"
     # Otherwise, we tokenize every text, then concatenate them together before splitting them in smaller parts.
-    # We use `return_special_tokens_mask=True` because DataCollatorForLanguageModeling (see below) is more
-    # efficient when it receives the `special_tokens_mask`.
+    # The Collator is modified not to read special_masks anyway:
 
     def tokenize_function(examples):
-        return tokenizer(examples[text_column_name], return_special_tokens_mask=True)
+        return tokenizer(
+            examples[text_column_name],
+            return_special_tokens_mask=False,
+            return_attention_mask=False,
+            return_token_type_ids=cfg_data.use_type_ids,
+        )
 
     tokenizer.model_max_length = 1e30
-
     tokenized_dataset = raw_dataset.map(
         tokenize_function, remove_columns=column_names, desc="Running tokenizer on every text in dataset", **map_setup
     )
@@ -384,12 +391,16 @@ def raw_dataset_preprocessing(raw_dataset, num_threads, cfg_data):
             return examples
 
         raw_dataset = raw_dataset.map(no_whitespaces, desc="Remove any whitespaces.", **map_setup)
+
     if cfg_data.remove_trash:
         # experimental first test based on Unigram tokenization:
         from transformers import AutoTokenizer
 
         if cfg_data.remove_trash == "self":
+            os.environ["TOKENIZERS_PARALLELISM"] = parellism_flag
             tokenizer = construct_tokenizer(raw_dataset, cfg_data, path=None)
+            if num_threads > 0:
+                os.environ["TOKENIZERS_PARALLELISM"] = "false"
         else:
             tokenizer = AutoTokenizer.from_pretrained("albert-base-v2")
         tokenizer.model_max_length = 1e30
@@ -413,6 +424,7 @@ def raw_dataset_preprocessing(raw_dataset, num_threads, cfg_data):
             raw_dataset, threshold=cfg_data.deduplication_threshold, original_cwd=hydra.utils.get_original_cwd()
         )
         log.info(f"Size of deduplicated dataset: {len(raw_dataset)}.")
+
     os.environ["TOKENIZERS_PARALLELISM"] = parellism_flag
     return raw_dataset
 
@@ -440,3 +452,23 @@ def main_process_first():
                 torch.distributed.barrier()
     else:
         yield
+
+
+def _load_from_hub(cfg_data, data_path):
+    from huggingface_hub import hf_hub_download
+
+    tokenized_dataset = datasets.load_dataset(cfg_data.hf_location, "train", streaming=cfg_data.streaming, cache_dir=data_path)["train"]
+    tokenized_dataset = tokenized_dataset.with_format("torch")
+
+    tokenizer_req_files = ["special_tokens_map.json", "tokenizer.json", "tokenizer_config.json"]
+    os.makedirs(os.path.join(data_path, "tokenizer"), exist_ok=True)
+    for file in tokenizer_req_files:
+        hf_hub_download(
+            cfg_data.hf_location,
+            file,
+            subfolder="tokenizer",
+            repo_type="dataset",
+            local_dir=os.path.join(data_path),
+        )
+    tokenizer = load_tokenizer(os.path.join(data_path, "tokenizer"), cache_dir=data_path)
+    return tokenized_dataset, tokenizer
