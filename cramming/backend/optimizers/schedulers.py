@@ -1,5 +1,4 @@
 """Misc. optimizer implementations."""
-import torch
 import transformers
 import math
 
@@ -188,10 +187,39 @@ def get_schedule_fn(cfg_train):
             )
 
     elif cfg_train.scheduler == "none" or cfg_train.scheduler is None:
-        scheduler_fn = partial(torch.optim.lr_scheduler.MultiStepLR, milestones=[], gamma=1)
+        scheduler_fn = DumbScheduler
     else:
         raise ValueError(f"Invalid schedule {cfg_train.scheduler} given.")
     return scheduler_fn
+
+
+class DumbScheduler:
+    def __init__(self, *args, **kwargs):
+        self._step_count = 0
+
+    def step(self, *args, **kwargs):
+        self._step_count += 1
+
+    def _initial_step(self):
+        self.optimizer._step_count = 0
+        self._step_count = 0
+        self.step()
+
+    def state_dict(self):
+        return {}
+
+    def load_state_dict(self, state_dict):
+        self.__dict__.update(state_dict)
+
+    def get_last_lr(self):
+        """Return last computed learning rate by current scheduler."""
+        return float("NaN")
+
+    def get_lr(self):
+        return float("NaN")
+
+    def print_lr(self, is_verbose, group, lr, epoch=None):
+        print(float("NaN"))
 
 
 """FairSeq-like inverse-square-root scheduler:"""

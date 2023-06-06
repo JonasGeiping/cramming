@@ -456,6 +456,22 @@ def _load_optimizer(model, cfg_train, cfg_impl):
         optimizer_class = Shampoo
     elif cfg_train.optim.type == "AdaHessian":
         optimizer_class = Adahessian
+    elif cfg_train.optim.type == "AdamWScale":
+        optimizer_class = AdamWScale
+    elif cfg_train.optim.type == "Sophia-G":
+        optimizer_class = Sophia
+    elif cfg_train.optim.type == "Lion":
+        from lion_pytorch import Lion
+
+        optimizer_class = Lion
+
+    elif cfg_train.optim.type == "Adam8bit":
+        import bitsandbytes as bnb
+
+        optimizer_class = bnb.optim.Adam8bit
+    elif cfg_train.optim.type == "AGD":
+        depth = len(list(model.parameters()))
+        optimizer_class = partial(AGD, depth=depth)
     else:
         raise ValueError(f"Invalid optimizer {cfg_train.optim.type} given.")
     optimizer_args = {k: v for k, v in cfg_train.optim.items() if k != "type"}
