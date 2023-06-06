@@ -37,12 +37,8 @@ def main_training_process(cfg, setup):
     training_allowed = True
     loss_vals = []
 
-    iterable_data = enumerate(dataloader)
-    if cfg.train.gradinit.enabled:
-        model_engine.gradinit(iterable_data, cfg.train.optim, cfg.train.gradinit)
-
     # Launch training
-    for step, batch in iterable_data:
+    for step, batch in enumerate(dataloader):
         # Heavy lifting is moved to engines
         device_batch = model_engine.to_device(batch)
         loss = model_engine.step(device_batch)
@@ -62,7 +58,7 @@ def main_training_process(cfg, setup):
 
         # Checkpointing is triggered from stopping criteria and normal intervals
         if cfg.impl.save_intermediate_checkpoints and step % cfg.impl.save_every_nth_step == 0:
-            state = dict(step=step, tokenizer_name=tokenizer.name_or_path)
+            state = dict(step=step, tokenizer_name=tokenizer.name)
             checkpoint_id = loss.item()
             if cramming.utils.is_main_process():
                 model_engine.save_training_checkpoint(checkpoint_id, state=state)
@@ -76,14 +72,19 @@ def main_training_process(cfg, setup):
         if (cfg.dryrun and step > 2) or not training_allowed:
             break
 
+    # Save to summary:
+    cramming.utils.save_summary("pretrain", cfg, stats, time.time() - local_time, setup)
     if cramming.utils.is_main_process():
-        # Save to summary:
-        metrics = dict(num_params=sum([p.numel() for p in model.parameters()]))
-        cramming.utils.save_summary("pretrain", cfg, metrics, stats, time.time() - local_time, setup)
-        # Save final checkpoint:
-        now = datetime.datetime.now()
-        checkpoint_id = f"{''.join(cfg.arch.architectures)}_{now.strftime('%Y-%m-%d')}_{loss:2.4f}"
-        model_engine.save_final_model(os.path.join(cfg.base_dir, cfg.name), checkpoint_id, tokenizer, cfg.arch, cfg.dryrun)
+        # Save final checkpoint?
+        if loss.detach().isfinite():
+            now = datetime.datetime.now()
+            checkpoint_id = f"{''.join(cfg.arch.architectures)}_{now.strftime('%Y-%m-%d')}_{loss:2.4f}"
+            model_engine.save_final_model(os.path.join(cfg.base_dir, cfg.name), checkpoint_id, tokenizer, cfg.arch, cfg.dryrun)
+
+            if cfg.impl.push_to_huggingface_hub:
+                model_engine.push_to_hub(tokenizer, cfg, dryrun=cfg.dryrun)
+    metrics = dict(num_params=sum([p.numel() for p in model.parameters()]))
+    return metrics
 
 
 def check_deadline(launch_time, hour_limit):
@@ -109,7 +110,7 @@ def collect_stats(step, loss_vals, train_time, stats, model_engine, dataloader, 
     stats["tokens"] += [step * tokens_per_step]
     stats["loss"] += [torch.stack(loss_vals).mean().item()]  # Averaged loss
 
-    current_lr = model_engine.optimizer.param_groups[0]["lr"]
+    current_lr = model_engine.optimizer.param_groups[0].get("lr", float("NaN"))
     log_msg = f"Train loss {loss_vals[-1].item():2.4f} at step {step} with lr {current_lr:.5f}. "
     log_msg += f"[Avg: {stats['loss'][-1]:2.4f}] "
     if step > 0:
@@ -136,9 +137,10 @@ def collect_stats(step, loss_vals, train_time, stats, model_engine, dataloader, 
 
 
 def flag_communication(training_allowed):
-    """A quick and dirty communication through NCCL. Should not be a major burden."""
+    """A quick and dirty communication through the comm protocol. Should not be a major burden."""
     if torch.distributed.is_initialized():
-        comm_tensor = torch.as_tensor(training_allowed).cuda()
+        comm_tensor = torch.as_tensor(training_allowed)
+        comm_tensor = comm_tensor.cuda() if torch.cuda.is_available() else comm_tensor.float()
         torch.distributed.all_reduce(comm_tensor, torch.distributed.ReduceOp.MIN, async_op=False)
         if comm_tensor >= 1:
             return True
