@@ -155,6 +155,8 @@ def system_startup(cfg):
         pynvml.nvmlInit()
         miilijoule_start = pynvml.nvmlDeviceGetTotalEnergyConsumption(pynvml.nvmlDeviceGetHandleByIndex(device.index))
         kWh_counter = dict(initial_value=miilijoule_start * 1e-6 / 3600)  # kilojoule per hour
+    else:
+        kWh_counter = dict(initial_value=float("NaN"))
     setup = dict(device=device, dtype=dtype)
     python_version = sys.version.split(" (")[0]
 

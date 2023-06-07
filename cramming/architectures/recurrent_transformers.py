@@ -15,8 +15,8 @@ from .components import (
     get_extended_attention_mask,
     _get_norm_fn,
     _get_nonlin_fn,
+    _init_module,
 )
-from .scriptable_bert import ScriptableLMForSequenceClassification, _init_module
 
 INPLACE = False
 
@@ -29,7 +29,7 @@ def construct_scriptable_recurrent(cfg_arch, vocab_size, downstream_classes=None
     if downstream_classes is None:
         model = BPTTforPreTraining(ScriptableRecurrentLM(cfg_arch), cfg_arch)
     else:
-        model = ScriptableLMForSequenceClassification(ScriptableRecurrentLM(cfg_arch), cfg_arch)
+        raise ValueError("Not yet implemented for 2.0")
     return model
 
 
