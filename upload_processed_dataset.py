@@ -75,6 +75,7 @@ def upload(cfg, setup):
                 repo_type="dataset",
             )
         log.info("Upload completed succesfully.")
+    return {}
 
 
 @hydra.main(config_path="cramming/config", config_name="cfg_pretrain", version_base="1.1")

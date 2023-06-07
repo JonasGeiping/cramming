@@ -470,5 +470,5 @@ def _load_from_hub(cfg_data, data_path):
             repo_type="dataset",
             local_dir=os.path.join(data_path),
         )
-    tokenizer = load_tokenizer(os.path.join(data_path, "tokenizer"), cache_dir=data_path)
+    tokenizer = load_tokenizer(os.path.join(data_path, "tokenizer"), seq_length=cfg_data.seq_length, cache_dir=data_path)
     return tokenized_dataset, tokenizer

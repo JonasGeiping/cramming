@@ -41,7 +41,7 @@ def initialize_torch(model, dataset, tokenizer, cfg_train, cfg_impl, setup=_defa
         model_engine = TorchEngineFull(model, cfg_train, cfg_impl, setup=setup, seq_length=tokenizer.model_max_length)
     else:
         model_engine = TorchEngineMinimal(model, cfg_train, cfg_impl, setup=setup, seq_length=tokenizer.model_max_length)
-    model_engine.train()
+    model_engine.train()  # This is the default engine state. Pretraining scripts may change this.
     return model_engine, model_engine.optimizer, model_engine.scheduler, dataloader
 
 

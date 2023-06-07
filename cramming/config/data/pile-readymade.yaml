@@ -1,10 +1,11 @@
 # Draw a preprocessed dataset directly from my HF profile.
 # This dataset is already tokenized, you "have" to load the correct tokenizer
-name: roots-mini
+name: pile-readymade
 sources:
   hub:
     provider: hub
-hf_location: JonasGeiping/roots-mini_WordPiecex32768_2a22a1d08cbdc9685c3c795938ebebfb
+hf_location: JonasGeiping/the_pile_WordPiecex32768_97b8e776baafb99c3892e6572a9f51b3
 streaming: True
 
 vocab_size: 32768 # cannot be changed!
+seq_length: 128 # cannot be changed!
