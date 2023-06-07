@@ -1,4 +1,4 @@
-# This would be a slice of the pile
+# This is how the pile could be used with streaming.
 name: the_pile
 defaults:
   - sources:

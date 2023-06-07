@@ -1,4 +1,4 @@
-# singl(ish) GPU, sane pytorch stuff
+# single/multi GPU, sane(?) pytorch parameters
 name: torch-default
 defaults:
   - _default

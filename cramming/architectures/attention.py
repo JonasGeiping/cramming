@@ -1,4 +1,4 @@
-"""Attention modules. Most code heavily stolen from the GPT-neoX implementation"""
+"""Attention modules. The final model uses "self-attention", but other options were tried and are still documented here."""
 import torch
 from transformers.models.bert.modeling_bert import BertSelfAttention
 

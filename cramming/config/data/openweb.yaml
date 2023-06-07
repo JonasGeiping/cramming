@@ -1,4 +1,4 @@
-# Selection of English sources from the ROOTS project
+# Openwebtext in the huggingface version
 name: openweb
 defaults:
   - sources:

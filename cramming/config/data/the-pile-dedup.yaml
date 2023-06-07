@@ -1,4 +1,4 @@
-# This would be a slice of C4
+# This is the deduplicated pile directly from the processed HF version.
 name: the-pile-dedup
 defaults:
   - sources:

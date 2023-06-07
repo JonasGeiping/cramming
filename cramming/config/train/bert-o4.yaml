@@ -16,12 +16,12 @@ limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight, norm] # no weight d
 # Steps:
 warmup_steps: 0
 cooldown_steps: 0
-steps: 600000 # these are microbatch steps
+steps: 600000 # these are microbatch steps. This is an upper limit that is usually never reached.
 scheduler: budget-triangle2
 
 # Training settings:
 batch_size: 8192
-batch_size_ramp: 0.60
+batch_size_ramp: 0.60 # in percentage points, i.e. training reaches the target 8192 at 60% of the total budget.
 
 gradient_clipping: 0.5
 pretrain_in_train_mode: False # default BERT trains with dropout layers enabled in pretrain

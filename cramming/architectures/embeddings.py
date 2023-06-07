@@ -1,4 +1,4 @@
-"""Non-standard embedding implementations."""
+"""Standard and Non-standard embedding implementations. Several implementation variations of rotary embeddings."""
 import torch
 import math
 

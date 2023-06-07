@@ -1,4 +1,8 @@
-"""(Hopefully) seamless integration of deepspeed."""
+"""(Hopefully) seamless integration of deepspeed.
+
+I have not used this in a while, handle the deepspeed backend with care.
+
+"""
 import torch
 import os
 import json

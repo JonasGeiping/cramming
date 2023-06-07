@@ -1,4 +1,12 @@
-"""Basic training backend for normal pytorch training."""
+"""Basic training backend engine for pytorch training with all bells and whistles.
+
+Interface set up to be compliant with the deepspeed engine interface.
+
+
+There are two versions here, the TorchEngineMinimal, which is the default, and TorchEngineFull which contains a few training variations
+that were tested but ultimately discarded, so read that part only if you're interested.
+
+"""
 import torch
 import torch._inductor.utils
 

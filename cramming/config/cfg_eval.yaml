@@ -2,8 +2,8 @@
 # Settings are separated into hyperparameters for architecture, data, implementation and train/eval hyperparams
 defaults:
   - impl: torch-default
-  - wandb: none
-  - eval: mnli
+  - wandb: default
+  - eval: GLUE_sane
   - _self_
   - override hydra/job_logging: custom
 

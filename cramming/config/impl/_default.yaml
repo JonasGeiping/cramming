@@ -1,5 +1,8 @@
 # Settings for implementation details
 # These settings "should" not influence the outcome of the computation in major ways, only its speed.
+#
+
+##################################################################################################################################3
 
 # This is the main folder where data will be stored (such as caches of datasets and tokenizers):
 # This can be an absolute path (which will be honored) or a relative path
@@ -26,8 +29,7 @@ early_termination:
   budget: 3 # budget in hours
   loss_threshold: 6.0 # modify this for non-xent losses
 
-# Batch size settings:
-# batch_size: This is handled in train after commit 982a4d33cd7f79a48b691114ae78f6ad1cdbee69
+# Device micro batch size settings:
 microbatch_size: 128 # dont make it larger than batch_size...
 
 # Basic pytorch settings

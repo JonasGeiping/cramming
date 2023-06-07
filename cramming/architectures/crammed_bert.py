@@ -1,8 +1,9 @@
-"""This rewrite is a simplified version of the proposed changes that actually compiles in torch 2.0.
-   Read this first, you are looking for a less-complicated version :>
+"""This rewrite is a simplified version of the proposed changes that actually compiles statically in torch 2.0.
 
+This model is the final, optimized crammed model.
 
-Not all modifications discussed in the paper are implemented in this version, for all those, check scriptable_bert.py
+Not all ablations discussed in the paper are implemented as switches in this version,
+for all those, check scriptable_bert.py on the old branch.
 
 """
 import torch
@@ -69,7 +70,7 @@ class AttentionComponent(torch.nn.Module):
 
 class FFNComponent(torch.nn.Module):
     """Note: The FF layer is not auto-scaled when using a GLU type activation.
-    Better do this manually and choose a sensible intermed_size that is nicely divisible.
+    It actually turned out better not to scale it, so here the block is effectively smaller than may be expected.
 
     The neox suggestion for approx. equal parameter count is int(4 * 2 / 3 * hidden_size) * 2 [this is ~5.33]
     """
@@ -203,8 +204,8 @@ class ScriptableLMForPreTraining(PreTrainedModel):
         return {"loss": masked_lm_loss, "outputs": outputs}
 
     # Sparse prediction usually has an unpredictable number of entries in each batch
-    # for this reason, it is important to turn on fixed_15_percent as an implementation option
-    # which will always mask exactly this number of tokens
+    # but the dataloader was modified so that 25% of the batch is ALWAYS masked.
+    # This allows for static compilation. If you modify the dataloader, this function will fill your compile cache
     def _forward_sparse(self, outputs: torch.Tensor, labels: Optional[torch.Tensor] = None):
 
         labels = labels.view(-1)
@@ -442,7 +443,7 @@ class ScriptableLMForTokenClassification(PreTrainedModel):
         return dict(logits=logits, loss=loss)
 
 
-# ###### HF registry here? ############### #
+# ###### HF registry here ############### #
 
 AutoConfig.register("crammedBERT", crammedBertConfig)
 AutoModel.register(crammedBertConfig, ScriptableLM)

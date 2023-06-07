@@ -1,4 +1,4 @@
-# This would be a slice of the pile
+# This is a slice of the pile, loaded from a local source
 name: the_pile
 defaults:
   - sources:

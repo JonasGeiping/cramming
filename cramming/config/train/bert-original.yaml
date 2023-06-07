@@ -1,5 +1,5 @@
 # Basic hyperparameter for normal BERT pretraining
-# working hard here to separate "impl" implementation details and "train" abstract hyperparameters
+# working hard here to separate "impl" implementation details and "train" hyperparameters
 
 name: bert-original
 

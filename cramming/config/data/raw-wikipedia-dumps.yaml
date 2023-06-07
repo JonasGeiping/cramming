@@ -1,5 +1,6 @@
-# This would be a slice of the pile
-name: the_pile
+# You can also draw in raw dumps of wikipedia for almost any language.
+# Change sources.raw_wiki_dump.language to another language to preprocess that language.
+name: wiki_dump
 defaults:
   - sources:
       - raw_wiki_dump

@@ -1,5 +1,5 @@
 # Draw a preprocessed dataset directly from my HF profile.
-# This dataset is already tokenized, you "have" to load the correct tokenizer
+# This dataset is already tokenized, you "have" to load the correct tokenizer (which happens automatically with data.load_pretraining_corpus)
 name: pile-readymade
 sources:
   hub:

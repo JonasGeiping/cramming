@@ -1,4 +1,4 @@
-# This would be a slice of C4
+# This is a slice of C4
 name: c4-subset
 defaults:
   - sources:

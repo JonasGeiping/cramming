@@ -1,4 +1,4 @@
-"""A more detailed implementation of recurrent stuff, extending the simple recurrent block implementation in scriptable_bert.py"""
+"""An implementation of a depth-recurrent transformer."""
 
 
 import torch
