@@ -144,7 +144,6 @@ class BPTTforPreTraining(torch.nn.Module):
 
         for name, module in self.named_modules():
             _init_module(
-                name,
                 module,
                 self.cfg.init.type,
                 self.cfg.init.std,

@@ -199,7 +199,6 @@ class ScriptableLMForPreTraining(PreTrainedModel):
 
         for name, module in self.named_modules():
             _init_module(
-                name,
                 module,
                 self.cfg.init.type,
                 self.cfg.init.std,
@@ -266,7 +265,6 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
 
         for name, module in self.named_modules():
             _init_module(
-                name,
                 module,
                 self.cfg.init.type,
                 self.cfg.init.std,

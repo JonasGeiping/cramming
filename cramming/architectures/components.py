@@ -283,7 +283,7 @@ def get_extended_attention_mask(attention_mask: torch.Tensor, input_shape: Tuple
 
 
 @torch.no_grad()
-def _init_module(name, module, init_method="normal", init_std=0.02, hidden_size=768, num_layers=12):
+def _init_module(module, init_method="normal", init_std=0.02, hidden_size=768, num_layers=12):
 
     if init_method == "normal":
         std = init_std
