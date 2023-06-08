@@ -11,8 +11,6 @@
 path: data
 
 # data implementation:
-defaults:
-  - data_structure: from-disk # can be LMDB or RAM or None to load directly from disk
 local_staging_dir: # Optionally copy a preprocessed dataset into this folder before loading it for training
 forbid_dataset_preprocessing: True
 temporary_corpus: False # Save data directly into local staging dir, forget after use
