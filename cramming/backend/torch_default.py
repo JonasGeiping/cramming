@@ -328,14 +328,19 @@ class TorchEngineMinimal(torch.nn.Module):
             with working_or_temp_dir(working_dir=working_dir, use_temp_dir=use_temp_dir) as work_dir:
                 files_timestamps = self.model._get_files_timestamps(work_dir)
                 # Save all files.
-                self.model.save_pretrained(work_dir, max_shard_size="10GB", safe_serialization=True)
+                self.model.save_pretrained(
+                    work_dir,
+                    max_shard_size="10GB",
+                    safe_serialization=True,
+                    state_dict=self.retrieve_model_state_dict(),
+                )
                 self.model._upload_modified_files(
                     work_dir,
                     repo_id,
                     files_timestamps,
-                    commit_message=commit_message,
-                    token=use_auth_token,
-                    create_pr=create_pr,
+                    commit_message=None,
+                    token=None,
+                    create_pr=False,
                 )
             # Push tokenizer:
             tokenizer.push_to_hub(cfg.impl.hf_directoy_name)

@@ -36,10 +36,9 @@ class crammedBertConfig(PretrainedConfig):
 
 def construct_crammed_bert(cfg_arch, vocab_size, downstream_classes=None):
     """See the config file for details on what is possible."""
-    cfg_arch.embedding.vocab_size = vocab_size
-    cfg_arch.num_labels = downstream_classes
-
     config = crammedBertConfig(OmegaConf.to_container(cfg_arch, resolve=True))
+    config.arch["embedding"]["vocab_size"] = vocab_size
+    config.arch["num_labels"] = downstream_classes
 
     if downstream_classes is None:
         if config.arch["objective_layout"] == "MLM":
@@ -188,7 +187,7 @@ class ScriptableLMForPreTraining(PreTrainedModel):
                 self.cfg.num_transformer_layers,
             )
 
-    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
+    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None, **kwargs):
         outputs = self.encoder(input_ids, attention_mask)
         outputs = outputs.view(-1, outputs.shape[-1])
 
@@ -243,8 +242,6 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
         self.head = torch.nn.Linear(self.cfg.classification_head.head_dim, self.cfg.num_labels)
 
         self.problem_type = None
-        self.num_labels = self.cfg.num_labels
-
         self._init_weights()
 
     def _init_weights(self, module=None):
@@ -258,7 +255,7 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
                 self.cfg.num_transformer_layers,
             )
 
-    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
+    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None, **kwargs):
         logits = self.head(self.pooler(self.encoder(input_ids, attention_mask)))
 
         if labels is not None:
@@ -272,13 +269,13 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
 
             if self.problem_type == "regression":
                 loss_fct = torch.nn.MSELoss()
-                if self.num_labels == 1:
+                if self.cfg.num_labels == 1:
                     loss = loss_fct(logits.squeeze(), labels.squeeze())
                 else:
                     loss = loss_fct(logits, labels)
             elif self.problem_type == "single_label_classification":
                 loss_fct = torch.nn.CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+                loss = loss_fct(logits.view(-1, self.cfg.num_labels), labels.view(-1))
             elif self.problem_type == "multi_label_classification":
                 loss_fct = torch.nn.BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)
@@ -396,8 +393,6 @@ class ScriptableLMForTokenClassification(PreTrainedModel):
         self.head = torch.nn.Linear(self.cfg.classification_head.head_dim, self.cfg.num_labels)
 
         self.problem_type = None
-        self.num_labels = self.cfg.num_labels
-
         self._init_weights()
 
     def _init_weights(self, module=None):
@@ -425,13 +420,13 @@ class ScriptableLMForTokenClassification(PreTrainedModel):
 
             if self.problem_type == "regression":
                 loss_fct = torch.nn.MSELoss()
-                if self.num_labels == 1:
+                if self.cfg.num_labels == 1:
                     loss = loss_fct(logits.squeeze(), labels.squeeze())
                 else:
                     loss = loss_fct(logits, labels)
             elif self.problem_type == "single_label_classification":
                 loss_fct = torch.nn.CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+                loss = loss_fct(logits.view(-1, self.cfg.num_labels), labels.view(-1))
             elif self.problem_type == "multi_label_classification":
                 loss_fct = torch.nn.BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)

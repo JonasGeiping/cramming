@@ -4,6 +4,7 @@
 import torch
 from typing import Optional
 from random import randrange
+from transformers import PretrainedConfig
 
 # import torchdynamo
 
@@ -21,13 +22,25 @@ from .components import (
 INPLACE = False
 
 
+class crammedRecurrentConfig(PretrainedConfig):
+    model_type = "crammedRecurrent"
+
+    def __init__(self, cfg_arch_container: dict = {}, **kwargs):
+        self.arch = cfg_arch_container
+        super().__init__(**kwargs)
+
+
 def construct_scriptable_recurrent(cfg_arch, vocab_size, downstream_classes=None):
     """See the config file for details on what is possible."""
-    cfg_arch.embedding.vocab_size = vocab_size
-    cfg_arch.num_labels = downstream_classes
+    config = crammedRecurrentConfig(OmegaConf.to_container(cfg_arch, resolve=True))
+    config.embedding.vocab_size = vocab_size
+    config.num_labels = downstream_classes
 
     if downstream_classes is None:
-        model = BPTTforPreTraining(ScriptableRecurrentLM(cfg_arch), cfg_arch)
+        if config.arch["objective_layout"] == "MLM":
+            model = BPTTforPreTraining(config)
+        else:
+            raise ValueError(f"Invalid layout {config.arch['objective_layout']} of training objective given.")
     else:
         raise ValueError("Not yet implemented for 2.0")
     return model
@@ -86,7 +99,7 @@ class ScriptableRecurrentLM(torch.nn.Module):
 
         self.seq_first = self.recurrent_layer.LAYOUT == "[S B H]" if len(self.recurrent_layer) > 0 else False
 
-    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
+    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None, **kwargs):
         if attention_mask is not None:
             attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape, self.cfg.attention.causal_attention)
 
@@ -158,7 +171,7 @@ class BPTTforPreTraining(torch.nn.Module):
         else:
             raise ValueError(f"Invalid training scheme {cfg_arch.training_scheme} given.")
 
-    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
+    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None, **kwargs):
         return self._forward_method(input_ids, attention_mask, labels)
 
     def _forward_token_exit(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):

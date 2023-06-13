@@ -17,6 +17,7 @@ class SanityCheckforPreTraining(torch.nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         token_type_ids: Optional[torch.Tensor] = None,
+        **kwargs,
     ) -> dict[str, torch.Tensor]:
 
         embeds = self.word_embedding(input_ids)

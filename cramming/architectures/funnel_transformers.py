@@ -12,17 +12,6 @@ from .attention import FunnelAttention
 INPLACE = False
 
 
-def construct_scriptable_funnel(cfg_arch, vocab_size, downstream_classes=None):
-    """See the config file for details on what is possible."""
-    cfg_arch.embedding.vocab_size = vocab_size
-    cfg_arch.num_labels = downstream_classes
-    if downstream_classes is None:
-        model = ScriptableLMForPreTraining(ScriptableFunnelLM(cfg_arch), cfg_arch)
-    else:
-        model = ScriptableLMForSequenceClassification(ScriptableFunnelLM(cfg_arch), cfg_arch)
-    return model
-
-
 class crammedFunnelConfig(PretrainedConfig):
     model_type = "crammedFunnel"
 
@@ -31,12 +20,11 @@ class crammedFunnelConfig(PretrainedConfig):
         super().__init__(**kwargs)
 
 
-def construct_crammed_funnel(cfg_arch, vocab_size, downstream_classes=None):
+def construct_scriptable_funnel(cfg_arch, vocab_size, downstream_classes=None):
     """See the config file for details on what is possible."""
-    cfg_arch.embedding.vocab_size = vocab_size
-    cfg_arch.num_labels = downstream_classes
-
-    config = crammedBertConfig(OmegaConf.to_container(cfg_arch, resolve=True))
+    config = crammedFunnelConfig(OmegaConf.to_container(cfg_arch, resolve=True))
+    config.embedding.vocab_size = vocab_size
+    config.num_labels = downstream_classes
 
     if downstream_classes is None:
         if config.arch["objective_layout"] == "MLM":
@@ -148,7 +136,7 @@ class ScriptableFunnelLM(PreTrainedModel):
 
         self.seq_first = self.layers[0].LAYOUT == "[S B H]" if len(self.layers) > 0 else False
 
-    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
+    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None, **kwargs):
         if attention_mask is not None:
             attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape, self.cfg.attention.causal_attention)
         hidden_states = self.input_projection(self.embedding(input_ids))
@@ -206,7 +194,7 @@ class ScriptableLMForPreTraining(PreTrainedModel):
                 self.cfg.num_transformer_layers,
             )
 
-    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
+    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None, **kwargs):
         outputs = self.encoder(input_ids, attention_mask)
         outputs = outputs.view(-1, outputs.shape[-1])
 
