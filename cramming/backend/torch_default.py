@@ -13,9 +13,11 @@ import torch._inductor.utils
 import os
 import json
 from omegaconf import OmegaConf
-import logging
 from functools import partial
+from contextlib import nullcontext
 import time
+
+import logging
 
 import transformers
 from safetensors.torch import load_file, save_file, _remove_duplicate_names
@@ -80,14 +82,6 @@ class TorchEngineMinimal(torch.nn.Module):
         amp_dtype = getattr(torch, self.cfg_impl.mixed_precision_target_dtype) if setup["device"].type != "cpu" else torch.bfloat16
         self.amp_settings = dict(device_type=setup["device"].type, enabled=enabled, dtype=amp_dtype)
 
-        # Optional batch size rampup
-        self.current_batch_size = self.cfg_train.batch_size if self.cfg_train.batch_size_ramp == 0 else self.cfg_impl.microbatch_size
-
-        # Microbatch accumulation
-        self.accumulation_steps_expected = self.current_batch_size // self.cfg_impl.microbatch_size
-        self.accumulated_samples = 0  # Record the number of samples seen, reset after triggering gradient update
-        self.steps = 0  # Record the number of times "step" has been triggered
-
         # Choose setup and move model
         self.setup = setup
         model.to(**self.setup)
@@ -107,17 +101,30 @@ class TorchEngineMinimal(torch.nn.Module):
 
         if torch.distributed.is_initialized():
             self.model = self._init_distributed(model)
+            self.num_machines = torch.distributed.get_world_size()
         else:
             self.model = model
+            self.model.no_sync = nullcontext
+            self.num_machines = 1
+
+        # Microbatch accumulation settings and counters
+        self.effective_mbs = self.cfg_impl.microbatch_size * self.num_machines  # across machines
+        self.current_batch_size = self.cfg_train.batch_size if self.cfg_train.batch_size_ramp == 0 else self.effective_mbs
+        self.accumulation_steps_expected = self.current_batch_size // self.effective_mbs
+        self.accumulated_samples = 0  # Record the number of samples seen, reset after triggering gradient update
+        self.steps = 0  # Record the number of times "step" has been triggered
 
         self.optimizer, self.scheduler = _load_optimizer(model, cfg_train, cfg_impl)
         self.initial_time = time.time()
 
     def step(self, batch: dict[str, torch.Tensor]):
-        loss = self.forward(**batch)["loss"]
-        self.backward(loss)
-        self.optimizer_step()
-        return loss.detach()
+        self.accumulated_samples += self.effective_mbs
+        context = self.model.no_sync if self.accumulated_samples < self.current_batch_size else nullcontext
+        with context():
+            loss = self.forward(**batch)["loss"]
+            self.backward(loss)
+            self.optimizer_step()
+            return loss.detach()
 
     def to_device(self, batch: dict[str, torch.Tensor], keys: list[str] = ["input_ids", "labels"]):
         """Move batch of data into device memory."""
@@ -133,7 +140,6 @@ class TorchEngineMinimal(torch.nn.Module):
             return self.model(*inputs, **kwargs)
 
     def backward(self, loss):
-        self.accumulated_samples += self.cfg_impl.microbatch_size
         return self.scaler.scale(loss / self.accumulation_steps_expected).backward()
 
     @torch.no_grad()
@@ -164,24 +170,21 @@ class TorchEngineMinimal(torch.nn.Module):
     def set_train_batch_size(self, batch_size):
         """Allow dynamic modifications of batch size."""
         self.current_batch_size = batch_size
-        self.accumulation_steps_expected = self.current_batch_size // self.cfg_impl.microbatch_size
+        self.accumulation_steps_expected = self.current_batch_size // self.effective_mbs
 
     def schedule_batch_size(self):
         """Optionally implement linear batch size ramp-ups."""
         if (self.cfg_train.batch_size_ramp > 0) and (self.cfg_train.batch_size_ramp < 1):
-            # interpret as percentage of total budget
+            # interpret batch_size_ramp as percentage of total budget:
             elapsed_hours = (time.time() - self.initial_time) / 60 / 60
             fake_step = int(elapsed_hours / self.cfg_train.budget * self.cfg_train.steps)
 
             batch_size_step = self.cfg_train.batch_size / (self.cfg_train.steps * self.cfg_train.batch_size_ramp)
-
-            mbs = self.cfg_impl.microbatch_size
-            new_batch_size = min(int(fake_step * batch_size_step // mbs + 1) * mbs, self.cfg_train.batch_size)
+            new_batch_size = min(int(fake_step * batch_size_step // self.effective_mbs + 1) * self.effective_mbs, self.cfg_train.batch_size)
         elif self.steps < self.cfg_train.batch_size_ramp:
+            # interpret batch_size_ramp as fixed number of steps for ramp:
             batch_size_step = self.cfg_train.batch_size / self.cfg_train.batch_size_ramp
-            # [(int(s * batch_size_step) // mbs + 1) * mbs for s in range(n) if s < ramp]
-            mbs = self.cfg_impl.microbatch_size
-            new_batch_size = int(self.steps * batch_size_step // mbs + 1) * mbs
+            new_batch_size = int(self.steps * batch_size_step // self.effective_mbs + 1) * self.effective_mbs
         else:
             new_batch_size = self.cfg_train.batch_size
         self.set_train_batch_size(new_batch_size)
@@ -194,7 +197,19 @@ class TorchEngineMinimal(torch.nn.Module):
 
     def record_tokens_per_step(self):
         """Tokens in each microbatch step."""
-        return self.current_seq_length * self.cfg_impl.microbatch_size
+        return self.current_seq_length * self.effective_mbs
+
+    def _init_distributed(self, model):
+        model = torch.nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[self.setup["device"]] if self.setup["device"].type == "cuda" else None,
+            output_device=self.setup["device"] if self.setup["device"].type == "cuda" else None,
+            broadcast_buffers=self.cfg_impl.broadcast_buffers,
+            bucket_cap_mb=self.cfg_impl.bucket_cap_mb,
+            gradient_as_bucket_view=self.cfg_impl.gradient_as_bucket_view,
+            static_graph=self.cfg_impl.static_graph,
+        )
+        return model
 
     @torch.no_grad()
     def retrieve_model_state_dict(self):
@@ -209,30 +224,18 @@ class TorchEngineMinimal(torch.nn.Module):
             else:
                 state_dict = self.model.state_dict()
         to_removes = _remove_duplicate_names(state_dict)
-        metadata = None
-        for kept_name, to_remove_group in to_removes.items():
-            for to_remove in to_remove_group:
-                if metadata is None:
-                    metadata = {}
-
-                if to_remove not in metadata:
-                    # Do not override user data
-                    metadata[to_remove] = kept_name
-                del state_dict[to_remove]
-        state_dict = {k: v.contiguous() for k, v in state_dict.items()}
+        # metadata = None
+        # for kept_name, to_remove_group in to_removes.items():
+        #     for to_remove in to_remove_group:
+        #         if metadata is None:
+        #             metadata = {}
+        #
+        #         if to_remove not in metadata:
+        #             # Do not override user data
+        #             metadata[to_remove] = kept_name
+        #         del state_dict[to_remove]
+        state_dict = {k: v.clone().contiguous() for k, v in state_dict.items()}
         return state_dict
-
-    def _init_distributed(self, model):
-        model = torch.nn.parallel.DistributedDataParallel(
-            model,
-            device_ids=[self.setup["device"]] if self.setup["device"].type == "cuda" else None,
-            output_device=self.setup["device"] if self.setup["device"].type == "cuda" else None,
-            broadcast_buffers=self.cfg_impl.broadcast_buffers,
-            bucket_cap_mb=self.cfg_impl.bucket_cap_mb,
-            gradient_as_bucket_view=self.cfg_impl.gradient_as_bucket_view,
-            static_graph=self.cfg_impl.static_graph,
-        )
-        return model
 
     def load_checkpoint(self, cfg_arch, file, skip_optim_state=True):
         """Load list of states from checkpoint file. Not generally compatible with any other engine?"""
@@ -251,6 +254,9 @@ class TorchEngineMinimal(torch.nn.Module):
                 self.scheduler.load_state_dict(scheduler_state)
             else:
                 model_state = load_file(file, device=self.setup["device"].type)
+                if "encoder.embedding.word_embedding.weight" not in model_state:
+                    # Hack to save space when saving the model, more clever though would be save the right one in the first place
+                    model_state["encoder.embedding.word_embedding.weight"] = model_state["decoder.weight"]
                 try:
                     sanitized_state = {}
                     for k, v in model_state.items():

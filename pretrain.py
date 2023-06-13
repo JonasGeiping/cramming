@@ -106,7 +106,7 @@ def collect_stats(step, loss_vals, train_time, stats, model_engine, dataloader, 
     stats["step"] += [step]
     stats["epoch"] += [dataloader.epoch_counter]
 
-    tokens_per_step = cramming.utils.num_processes() * model_engine.record_tokens_per_step()
+    tokens_per_step = model_engine.record_tokens_per_step()
     stats["tokens"] += [step * tokens_per_step]
     stats["loss"] += [torch.stack(loss_vals).mean().item()]  # Averaged loss
 

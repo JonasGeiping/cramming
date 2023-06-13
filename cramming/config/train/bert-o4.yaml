@@ -16,7 +16,7 @@ limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight, norm] # no weight d
 # Steps:
 warmup_steps: 0
 cooldown_steps: 0
-steps: 600000 # these are microbatch steps. This is an upper limit that is usually never reached.
+steps: 900_000 # these are microbatch steps. This is an upper limit that is usually never reached.
 scheduler: budget-triangle2
 
 # Training settings:

@@ -20,7 +20,7 @@ optim:
 # Steps:
 warmup_steps: 0.06 # in percentage points
 cooldown_steps: 0
-steps: 600_000 # these are microbatch steps
+steps: 900_000 # these are microbatch steps # This is an upper limit that is usually never reached
 scheduler: budget-linear
 
 # Training settings:

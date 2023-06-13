@@ -1,10 +1,11 @@
 # Configuration defaults
 # Settings are separated into hyperparameters for architecture, data, implementation and train/eval hyperparams
+# These are defaults for a small test, not for the crammed model!
 defaults:
   - arch: hf-bert-tiny
-  - data: sanity-check-2 #bookcorpus-wikipedia
+  - data: sanity-check-2
   - impl: torch-default
-  - wandb: default
+  - wandb: none
   - train: bert-base
   - _self_
   - override hydra/job_logging: custom
