@@ -111,22 +111,16 @@ def system_startup(cfg):
             os.environ[str(env_var)] = str(string_val)
         log.info(os.environ)
 
-    # datasets will automatically disable tokenizer parallelism when needed:
-    os.environ["TOKENIZERS_PARALLELISM"] = "true"
-    os.environ["RAYON_RS_NUM_CPUS"] = str(min(torch.get_num_threads(), cfg.impl.threads))
-    max_dataset_memory = f"{psutil.virtual_memory().total // 2 // max(torch.cuda.device_count(), 1)}"
-    os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = max_dataset_memory
-
     if not torch.cuda.is_available() and not cfg.dryrun:
         raise ValueError(
             f"No GPU allocated to this process on {socket.gethostname()} with name {cfg.name}. Running in CPU-mode is likely an error."
         )
-    # Force thread reduction for all cases:
-    torch.set_num_threads(min(torch.get_num_threads(), max(cfg.impl.threads, 1)))
 
+    allowed_cpus_available = min(psutil.cpu_count(logical=False), len(psutil.Process().cpu_affinity()))  # covering both affinity and phys.
     # Distributed launch?
     if "LOCAL_RANK" in os.environ:
-        threads_per_gpu = max(1, min(torch.get_num_threads() // max(1, torch.cuda.device_count()), cfg.impl.threads))
+        threads_per_gpu = max(1, min(allowed_cpus_available // max(1, torch.cuda.device_count()), cfg.impl.threads))
+        torch.set_num_threads(threads_per_gpu)
         os.environ["OMP_NUM_THREADS"] = str(threads_per_gpu)
         local_rank = int(os.environ["LOCAL_RANK"])
         cfg.impl.local_rank = local_rank
@@ -140,9 +134,17 @@ def system_startup(cfg):
         )
         log.setLevel(logging.INFO if is_main_process() else logging.ERROR)
     else:
-        os.environ["OMP_NUM_THREADS"] = str(min(torch.get_num_threads(), cfg.impl.threads))
+        threads_per_gpu = min(allowed_cpus_available, cfg.impl.threads)
+        torch.set_num_threads(threads_per_gpu)
+        os.environ["OMP_NUM_THREADS"] = str(threads_per_gpu)
         global_rank = local_rank = 0
         cfg.impl.local_rank = local_rank
+
+    # datasets will automatically disable tokenizer parallelism when needed:
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    os.environ["RAYON_RS_NUM_CPUS"] = str(threads_per_gpu)
+    max_dataset_memory = f"{psutil.virtual_memory().total // 2 // max(torch.cuda.device_count(), 1)}"
+    os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = max_dataset_memory
 
     # Construct setup dictionary:
     dtype = getattr(torch, cfg.impl.default_precision)  # :> dont mess this up
@@ -162,7 +164,7 @@ def system_startup(cfg):
 
     if local_rank == 0:
         log.info(f"Platform: {sys.platform}, Python: {python_version}, PyTorch: {torch.__version__}")
-        log.info(f"CPUs: {torch.get_num_threads()}, GPUs: {torch.cuda.device_count()} on {socket.gethostname()}.")
+        log.info(f"CPUs: {allowed_cpus_available}, GPUs: {torch.cuda.device_count()} on {socket.gethostname()}.")
 
     # 100% reproducibility?
     if cfg.impl.deterministic:
