@@ -1,4 +1,8 @@
-"""Instantiate backend objects in a congruent format."""
+"""Instantiate backend objects in a congruent format.
+
+The interface is made to be compliant with the deepspeed interface.
+
+"""
 import torch
 
 from .torch_default import initialize_torch

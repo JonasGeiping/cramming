@@ -1,0 +1,4 @@
+architectures:
+  - SanityCheckLM
+
+width: 1024 # 8352

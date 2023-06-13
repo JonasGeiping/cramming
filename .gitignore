@@ -5,6 +5,8 @@ tables/*.csv
 tables/*.csv#
 tables/*.ods
 
+torch_compile_debug
+checkpoints
 wandb-metadata.json
 
 dedup

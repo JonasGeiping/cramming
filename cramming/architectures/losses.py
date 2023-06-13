@@ -1,3 +1,4 @@
+"""Alternatives to CrossEntropyLoss. Currently not hooked into crammed_bert.py, but tried with a previous version."""
 import torch
 import math
 

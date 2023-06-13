@@ -7,10 +7,13 @@ import os
 import csv
 import yaml
 import psutil
+import pynvml
+
 import multiprocess  # hf uses this for some reason
 import collections
 
 import torch
+import torch._inductor.config
 import transformers
 
 
@@ -38,38 +41,38 @@ def main_launcher(cfg, main_fn, job_name=""):
         cfg.seed = torch.randint(0, 2**32 - 1, (1,)).item()
 
     # Figure out all paths:
-    with open_dict(cfg):
-        cfg.original_cwd = hydra.utils.get_original_cwd()
-        # ugliest way to get the absolute path to output subdir
-        if not os.path.isabs(cfg.base_dir):
-            base_dir_full_path = os.path.abspath(os.getcwd())
-            while os.path.basename(base_dir_full_path) != cfg.base_dir:
-                base_dir_full_path = os.path.dirname(base_dir_full_path)
-                if base_dir_full_path == "/":
-                    raise ValueError("Cannot find base directory.")
-            cfg.base_dir = base_dir_full_path
-
-        cfg.impl.path = os.path.expanduser(cfg.impl.path)
-        if not os.path.isabs(cfg.impl.path):
-            cfg.impl.path = os.path.join(cfg.base_dir, cfg.impl.path)
+    cfg = pathfinder(cfg)
 
     # Decide GPU and possibly connect to distributed setup
-    setup = system_startup(cfg)
-    # Initialize wanDB :>
+    setup, kWh_counter = system_startup(cfg)
+    # Initialize wanDB
     if cfg.wandb.enabled:
         _initialize_wandb(setup, cfg)
     log.info("--------------------------------------------------------------")
     log.info(f"--------------Launching {job_name} run! ---------------------")
     log.info(OmegaConf.to_yaml(cfg, resolve=True))
-    main_fn(cfg, setup)
+    metrics = main_fn(cfg, setup)
+    metrics = collect_system_metrics(cfg, metrics, kWh_counter, setup)
 
     log.info("-------------------------------------------------------------")
     log.info(f"Finished running job {cfg.name} with total train time: " f"{str(datetime.timedelta(seconds=time.time() - launch_time))}")
-    if torch.cuda.is_available():
-        max_alloc = f"{torch.cuda.max_memory_allocated(setup['device'])/float(1024**3):,.3f} GB"
-        max_reserved = f"{torch.cuda.max_memory_reserved(setup['device'])/float(1024**3):,.3f} GB"
-        log.info(f"Max. Mem allocated: {max_alloc}. Max. Mem reserved: {max_reserved}.")
-    log.info("-----------------Job finished.-------------------------------")
+    if is_main_process():
+        metrics = flatten(metrics)
+        dump_metrics(cfg, metrics)
+        # Export to wandb:
+        if cfg.wandb.enabled:
+            import wandb
+
+            wandb.run.summary["VRAM"] = metrics["VRAM"]
+            wandb.run.summary["RAM"] = metrics["RAM"]
+            wandb.run.summary["kWh"] = metrics["kWh"]
+
+        if torch.cuda.is_available():
+            max_alloc = f"{torch.cuda.max_memory_allocated(setup['device'])/float(1024**3):,.3f} GB"
+            max_reserved = f"{torch.cuda.max_memory_reserved(setup['device'])/float(1024**3):,.3f} GB"
+            log.info(f"Max. Mem allocated: {max_alloc}. Max. Mem reserved: {max_reserved}.")
+            log.info(f"{metrics['kWh']:.2e} kWh of electricity used for GPU(s) during job.")
+    log.info("-----------------Shutdown complete.--------------------------")
 
 
 def system_startup(cfg):
@@ -78,20 +81,19 @@ def system_startup(cfg):
     Set all required and interesting environment variables.
     """
     torch.backends.cudnn.benchmark = cfg.impl.benchmark
-    torch.multiprocessing.set_sharing_strategy(cfg.impl.sharing_strategy)
+    torch.backends.cuda.enable_flash_sdp(cfg.impl.enable_flash_sdp) if cfg.impl.enable_flash_sdp is not None else 0
+    torch.backends.cuda.enable_math_sdp(cfg.impl.enable_math_sdp) if cfg.impl.enable_math_sdp is not None else 0
+    torch.backends.cuda.enable_mem_efficient_sdp(cfg.impl.enable_mem_efficient_sdp) if cfg.impl.enable_mem_efficient_sdp is not None else 0
+    torch.set_float32_matmul_precision(cfg.impl.matmul_precision)
+
+    if cfg.impl.sharing_strategy is not None:
+        torch.multiprocessing.set_sharing_strategy(cfg.impl.sharing_strategy)
 
     if cfg.impl.tf32_allowed:
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True  # Should be true anyway
 
-    if cfg.impl.no_jit_compilation:
-        torch.jit._state.disable()
-    else:
-        if torch.cuda.is_available():
-            set_jit_instructions(cfg.impl.jit_instruction_type)
-        else:
-            set_jit_instructions("default")
     multiprocess.set_start_method("forkserver")
     if cfg.impl.local_staging_dir is not None:
         tmp_path = os.path.join(cfg.impl.local_staging_dir, "tmp")
@@ -102,52 +104,67 @@ def system_startup(cfg):
         os.environ["HF_DATASETS_OFFLINE"] = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
-    # datasets will automatically disable tokenizer parallelism when needed:
-    os.environ["TOKENIZERS_PARALLELISM"] = "true"
-    os.environ["RAYON_RS_NUM_CPUS"] = str(min(torch.get_num_threads(), cfg.impl.threads))
-    max_dataset_memory = f"{psutil.virtual_memory().total // 2 // max(torch.cuda.device_count(), 1)}"
-    os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = max_dataset_memory
+    if cfg.impl.add_env_variables is not None:
+        # Note that for any environment variables added here, they have to be able to change behavior at runtime
+        # for example, the torchdynamo settings are read at import and cannot be changed at runtime here
+        for env_var, string_val in cfg.impl.add_env_variables.items():
+            os.environ[str(env_var)] = str(string_val)
+        log.info(os.environ)
 
     if not torch.cuda.is_available() and not cfg.dryrun:
         raise ValueError(
             f"No GPU allocated to this process on {socket.gethostname()} with name {cfg.name}. Running in CPU-mode is likely an error."
         )
 
-    # Force thread reduction for all cases:
-    torch.set_num_threads(min(torch.get_num_threads(), cfg.impl.threads))
-
+    allowed_cpus_available = min(psutil.cpu_count(logical=False), len(psutil.Process().cpu_affinity()))  # covering both affinity and phys.
     # Distributed launch?
     if "LOCAL_RANK" in os.environ:
-        threads_per_gpu = min(torch.get_num_threads() // max(1, torch.cuda.device_count()), cfg.impl.threads)
+        threads_per_gpu = max(1, min(allowed_cpus_available // max(1, torch.cuda.device_count()), cfg.impl.threads))
+        torch.set_num_threads(threads_per_gpu)
         os.environ["OMP_NUM_THREADS"] = str(threads_per_gpu)
         local_rank = int(os.environ["LOCAL_RANK"])
         cfg.impl.local_rank = local_rank
-        torch.distributed.init_process_group(backend=cfg.impl.backend)
+        torch.distributed.init_process_group(backend=cfg.impl.dist_backend)
         global_rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
         run = os.environ.get("TORCHELASTIC_RUN_ID", "unknown")
         log.info(
             f"Distributed worker initialized on rank {global_rank} (local rank {local_rank}) "
-            f"with {world_size} total processes. Run ID is {run}."
+            f"with {world_size} total processes. OMP Threads set to {threads_per_gpu}. Run ID is {run}."
         )
         log.setLevel(logging.INFO if is_main_process() else logging.ERROR)
     else:
-        os.environ["OMP_NUM_THREADS"] = str(min(torch.get_num_threads(), cfg.impl.threads))
+        threads_per_gpu = min(allowed_cpus_available, cfg.impl.threads)
+        torch.set_num_threads(threads_per_gpu)
+        os.environ["OMP_NUM_THREADS"] = str(threads_per_gpu)
         global_rank = local_rank = 0
         cfg.impl.local_rank = local_rank
+
+    # datasets will automatically disable tokenizer parallelism when needed:
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    os.environ["RAYON_RS_NUM_CPUS"] = str(threads_per_gpu)
+    max_dataset_memory = f"{psutil.virtual_memory().total // 2 // max(torch.cuda.device_count(), 1)}"
+    os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = max_dataset_memory
 
     # Construct setup dictionary:
     dtype = getattr(torch, cfg.impl.default_precision)  # :> dont mess this up
     device = torch.device(f"cuda:{local_rank}") if torch.cuda.is_available() else torch.device("cpu")
     if torch.cuda.is_available():
         torch.cuda.set_device(local_rank)
-        log.info(f"GPU : {torch.cuda.get_device_name(device=device)}")
+        log.info(f"GPU : {torch.cuda.get_device_name(device=device)}. CUDA: {torch.version.cuda}.")
+
+        # Populate kwH counter:
+        pynvml.nvmlInit()
+        miilijoule_start = pynvml.nvmlDeviceGetTotalEnergyConsumption(pynvml.nvmlDeviceGetHandleByIndex(device.index))
+        kWh_counter = dict(initial_value=miilijoule_start * 1e-6 / 3600)  # kilojoule per hour
+    else:
+        kWh_counter = dict(initial_value=float("NaN"))
     setup = dict(device=device, dtype=dtype)
     python_version = sys.version.split(" (")[0]
 
     if local_rank == 0:
         log.info(f"Platform: {sys.platform}, Python: {python_version}, PyTorch: {torch.__version__}")
-        log.info(f"CPUs: {torch.get_num_threads()}, GPUs: {torch.cuda.device_count()} on {socket.gethostname()}.")
+        log.info(f"CPUs: {allowed_cpus_available}, GPUs: {torch.cuda.device_count()} on {socket.gethostname()}.")
 
     # 100% reproducibility?
     if cfg.impl.deterministic:
@@ -157,7 +174,7 @@ def system_startup(cfg):
             log.info(f"Seeding with random seed {cfg.seed} on rank 0.")
         set_random_seed(cfg.seed + 10 * global_rank)
 
-    return setup
+    return setup, kWh_counter
 
 
 def is_main_process():
@@ -212,7 +229,7 @@ def find_pretrained_checkpoint(cfg, downstream_classes=None):
         # All mismatched parameters will be randomly initialized ...
         if cfg.eval.arch_modifications is not None:
             cfg_arch = OmegaConf.merge(cfg_arch, cfg.eval.arch_modifications)
-        model_file = os.path.join(checkpoint_name, "model.pth")
+        model_file = os.path.join(checkpoint_name, "model.safetensors")
 
         print(cfg_arch)
 
@@ -220,7 +237,7 @@ def find_pretrained_checkpoint(cfg, downstream_classes=None):
     return tokenizer, cfg_arch, model_file
 
 
-def save_summary(table_name, cfg, metrics, stats, local_time, setup, original_cwd=True):
+def save_summary(table_name, cfg, stats, local_time, setup, original_cwd=True):
     """Save two summary tables. A detailed table of iterations/loss+acc and a summary of the end results."""
     # 1) detailed table:
     for step in range(len(stats["loss"])):
@@ -242,13 +259,6 @@ def save_summary(table_name, cfg, metrics, stats, local_time, setup, original_cw
     base_name = cfg.base_dir.rstrip(os.sep).split(os.sep)[-1]
     local_folder = os.getcwd().split(base_name)[1].lstrip(os.sep)
 
-    # Add some compute metrics:
-    metrics["GPU"] = torch.cuda.get_device_name(device=setup["device"]) if torch.cuda.device_count() > 0 else ""
-    metrics["numGPUs"] = torch.cuda.device_count()
-    metrics["VRAM"] = torch.cuda.max_memory_allocated(setup["device"]) / float(1 << 30)
-    metrics["RAM"] = psutil.Process(os.getpid()).memory_info().rss / 1024**3
-    # Flatten metrics:
-    metrics = flatten(metrics)
     # 2) save a reduced summary
     if table_name == "pretrain":
         summary = dict(
@@ -264,7 +274,6 @@ def save_summary(table_name, cfg, metrics, stats, local_time, setup, original_cw
             loss100k=_maybe_record("loss", step=100_000 // cfg.impl.print_loss_every_nth_step),
             loss200k=_maybe_record("loss", step=200_000 // cfg.impl.print_loss_every_nth_step),
             loss300k=_maybe_record("loss", step=300_000 // cfg.impl.print_loss_every_nth_step),
-            **{k: v for k, v in metrics.items()},
             total_time=str(datetime.timedelta(seconds=local_time)).replace(",", ""),
             batch_size=cfg.train.batch_size,
             lr=cfg.train.optim.lr,
@@ -290,7 +299,6 @@ def save_summary(table_name, cfg, metrics, stats, local_time, setup, original_cw
             avg_loss=_maybe_record("avg_loss"),
             final_epoch=_maybe_record("epoch"),
             step_time=np.mean(stats["train_time"]) if len(stats["train_time"]) > 0 else "",
-            **{k: v for k, v in metrics.items()},
             total_time=str(datetime.timedelta(seconds=local_time)).replace(",", ""),
             batch_size=cfg.eval.batch_size,
             lr=cfg.eval.optim.lr,
@@ -314,7 +322,6 @@ def save_to_table(out_dir, table_name, dryrun, **kwargs):
         os.makedirs(out_dir)
     fname = os.path.join(out_dir, f"table_{table_name}.csv")
     fieldnames = list(kwargs.keys())
-
     # Read or write header
     try:
         with open(fname, "r") as f:
@@ -360,7 +367,7 @@ def set_deterministic():
     os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 
-def set_jit_instructions(type="nvfuser"):
+def set_jit_instructions(type=None):
     """Refer also https://github.com/pytorch/pytorch/blob/c90be037b46f58d2b120f46a1c466976f66817b5/torch/jit/_fuser.py#L20"""
     # torch._C._set_graph_executor_optimize(True)
     if type == "nvfuser":
@@ -470,3 +477,47 @@ def flatten(d, parent_key="", sep="_"):
         else:
             items.append((new_key, v))
     return dict(items)
+
+
+def collect_system_metrics(cfg, metrics, kWh_counter, setup):
+    # Finalize some compute metrics:
+    metrics["GPU"] = torch.cuda.get_device_name(device=setup["device"]) if torch.cuda.device_count() > 0 else ""
+    metrics["numGPUs"] = torch.cuda.device_count()
+    metrics["VRAM"] = torch.cuda.max_memory_allocated(setup["device"]) / float(1 << 30)
+    metrics["RAM"] = psutil.Process(os.getpid()).memory_info().rss / 1024**3
+    if torch.cuda.device_count() == 1:
+        metrics["kWh"] = get_kWh(kWh_counter, setup)
+    else:
+        if torch.distributed.is_initialized():
+            local_kWh = get_kWh(kWh_counter, setup)
+            kWh_comm = torch.as_tensor(local_kWh).cuda() if torch.cuda.is_available() else kWh_comm.float()
+            torch.distributed.all_reduce(kWh_comm, torch.distributed.ReduceOp.SUM, async_op=False)
+            metrics["kWh"] = kWh_comm.item()
+        else:
+            metrics["kWh"] = float("NaN")
+    return metrics
+
+
+def get_kWh(kWh_counter, setup):
+    miilijoule_final = pynvml.nvmlDeviceGetTotalEnergyConsumption(pynvml.nvmlDeviceGetHandleByIndex(setup["device"].index))
+    kWh_final = miilijoule_final * 1e-6 / 3600  # kilojoule per hour
+    kWh = kWh_final - kWh_counter["initial_value"]
+    return kWh
+
+
+def pathfinder(cfg):
+    with open_dict(cfg):
+        cfg.original_cwd = hydra.utils.get_original_cwd()
+        # ugliest way to get the absolute path to output subdir
+        if not os.path.isabs(cfg.base_dir):
+            base_dir_full_path = os.path.abspath(os.getcwd())
+            while os.path.basename(base_dir_full_path) != cfg.base_dir:
+                base_dir_full_path = os.path.dirname(base_dir_full_path)
+                if base_dir_full_path == "/":
+                    raise ValueError("Cannot find base directory.")
+            cfg.base_dir = base_dir_full_path
+
+        cfg.impl.path = os.path.expanduser(cfg.impl.path)
+        if not os.path.isabs(cfg.impl.path):
+            cfg.impl.path = os.path.join(cfg.base_dir, cfg.impl.path)
+    return cfg

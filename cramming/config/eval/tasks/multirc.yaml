@@ -1,0 +1,7 @@
+# dataset-specific settings
+multirc:
+  collection: super_glue
+  regression: False
+  structure: [question, paragraph, answer]
+
+  target_metrics: ["f1_a"]

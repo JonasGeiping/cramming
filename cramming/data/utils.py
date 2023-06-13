@@ -4,6 +4,7 @@ from omegaconf import OmegaConf
 import hashlib
 import json
 import shutil
+import subprocess
 
 import logging
 import time
@@ -72,3 +73,24 @@ def _get_size(start_path="."):
             if not os.path.islink(fp):
                 total_size += os.path.getsize(fp)
     return total_size
+
+
+def detailed_OSError(e):
+    if e.errno == 28:  # "no space left on device"
+        if e.filename:
+            df_output = subprocess.check_output(["df", "-h", e.filename]).decode("utf-8")
+            df_lines = df_output.strip().split("\n")[1:]
+            if df_lines:
+                # The file system containing the file is full
+                device_name, size, used, available, percent, mount_point = df_lines[0].split()
+                error_path = os.path.abspath(e.filename)
+                error_message = f"Error writing to {error_path}: {e.strerror}"
+                space_message = f"{available} space left on {mount_point}"
+                full_error_message = f"{error_message}\nDevice {device_name} is full. {space_message}"
+        else:
+            # The file name is unknown
+            error_message = f"Error: {e.strerror}"
+            full_error_message = f"{error_message}\nUnknown file name. Device may be full."
+        raise OSError(full_error_message)
+    else:
+        raise e

@@ -1,3 +1,8 @@
+#
+# These are instructions for the old, pytorch 1.13, version of the repo, they are not usable on the updated repo and provided only for reference.
+# (but could be easily adapted to the newer format)
+#
+
 # # Run through the entire training setup and reproduce numbers on c5
 #
 # coarse:

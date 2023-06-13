@@ -3,3 +3,5 @@ mnli:
   collection: glue
   regression: False
   structure: [premise, hypothesis]
+
+  target_metrics: [accuracy, accuracy_extra]

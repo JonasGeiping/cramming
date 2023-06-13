@@ -2,4 +2,6 @@
 sst2:
   collection: glue
   regression: False
-  structure: [sentence, null]
+  structure: [sentence]
+
+  target_metrics: [accuracy]

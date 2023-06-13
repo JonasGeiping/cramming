@@ -3,3 +3,5 @@ wnli:
   collection: glue
   regression: False
   structure: [sentence1, sentence2]
+
+  target_metrics: [accuracy]

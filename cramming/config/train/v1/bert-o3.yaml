@@ -1,0 +1,65 @@
+# Version 3 of changes to bert training hyperparameters
+# Now with gradient clipping and shifted triangle learning rate
+
+name: bert-o3
+
+defaults:
+  - optim: adam
+  - optim_mod: disabled
+
+optim:
+  lr: 1e-3
+  weight_decay: 0.01
+
+limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight, norm] # no weight decay for these layers
+
+# steps:
+warmup_steps: 0
+cooldown_steps: 0
+steps: 600000 # these are microbatch steps
+scheduler: budget-triangle2
+
+# Training settting:
+batch_size: 4096
+batch_size_ramp: 300000
+
+gradient_clipping: 0.5
+pretrain_in_train_mode: False # default BERT trains with dropout layers enabled in pretrain
+
+objective:
+  name: masked-lm
+  mlm_probability: 0.15625 # leads to mbs * seq_length * prob = 2560 masked entries, for mbs=128, seq=128, # next nice: 0.25
+  # Use 0.25 for mbs=64 and 0.16666 for mbs=96, at least this many sixes to round up to 2048
+  # f = lambda x: pow(2, math.ceil(math.log(x)/math.log(2)))
+  # f(mbs * seq * 0.15) / mbs / seq
+  use_80_20_rule: True
+  disable_mlm: False
+  token_drop: 0.0
+reverse_dataset_order: False
+
+budget: ${budget}
+# gradinit:
+#   enabled: False
+# eta: 1.0
+# tau: 1e-3 # step size
+# steps: 50
+# min_scale: 1e-3
+# max_scale: 1e3
+# step_type: sign-grad # sign-grad or grad
+# second_order: False
+# sequence_curriculum:
+#   lengths: [8,16,32,64,128]
+#   triggers: [0.1,0.2,0.3,0.5,0.75]
+#   unfold: False
+
+# weight_averaging:
+#   type: EMA
+#   frequency: 1
+#   momentum: 0.995 # only for EMA
+#   last_k: 10
+
+# CU1: +train.sequence_curriculum.lengths=[8,16,32,64,128] +train.sequence_curriculum.triggers=[0.1,0.2,0.3,0.5,0.75] +train.sequence_curriculum.unfold=False
+# CU2: +train.sequence_curriculum.lengths=[8,16,32,64,128] +train.sequence_curriculum.triggers=[0.1,0.2,0.3,0.5,0.75] +train.sequence_curriculum.unfold=True
+
+# LAWA: +train.weight_averaging.frequency=5000 +train.weight_averaging.type=LAWA +train.weight_averaging.last_k=10
+# EMA: +train.weight_averaging.frequency=1 +train.weight_averaging.type=EMA +train.weight_averaging.momentum=0.995

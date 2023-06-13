@@ -33,7 +33,13 @@ def main_downstream_process(cfg, setup):
         model = cramming.construct_model(cfg_arch, tokenizer.vocab_size, downstream_classes=task["num_classes"])
         model_engine, _, _, _ = cramming.load_backend(model, None, tokenizer, cfg.eval, cfg.impl, setup=setup)
         model_engine.load_checkpoint(cfg_arch, model_file)
-        metric = evaluate.load(task["details"]["collection"], task_name, cache_dir=cfg.impl.path)
+
+        try:
+            assert task_name != "record"
+            metric = evaluate.load(task["details"]["collection"], task_name, cache_dir=cfg.impl.path)
+        except (FileNotFoundError, AssertionError):  # no specific metric downloadable from evaluate, construct directly
+            targets = [evaluate.load(metric_name, cache_dir=cfg.impl.path) for metric_name in task["details"]["target_metrics"]]
+            metric = evaluate.CombinedEvaluations(targets)
         # Launch training
         model_engine.train()
         loss_vals = []
@@ -76,20 +82,35 @@ def main_downstream_process(cfg, setup):
 
             if cfg.dryrun:
                 break
-        # Launch testing:
+        # Launch extra testing if extra validation set exists (as with MNLI-mismatched):
         if task["extra_validloader"] is not None:
             extra_eval_metric = validate(model_engine, task["extra_validloader"], metric, setup, cfg)
-            metrics[task_name + "extra"] = extra_eval_metric
+            # metrics[task_name + "extra"] = extra_eval_metric
+            metrics[task_name].update({f"{k}_extra": v for k, v in extra_eval_metric.items()})
             for name, metric_val in extra_eval_metric.items():
                 stats[f"{task_name}_{name}_extra"] += [metric_val]
             msg_metrics = " ".join([f"{k}: {v:2.4f}" for k, v in extra_eval_metric.items()])
             log.info(f"Extra validation metric is {msg_metrics} after finetuning.")
-            cramming.utils.wandb_log({f"{task_name}_{name}_extra": [v] for k, v in extra_eval_metric.items()}, cfg)
+            cramming.utils.wandb_log({f"{task_name}_{k}_extra": [v] for k, v in extra_eval_metric.items()}, cfg)
+
+    # Check average metric over all tasks:
+    target_metrics = []
+    for task_name, task in tasks.items():
+        target_metric_names = task["details"]["target_metrics"]
+        for metric_name in target_metric_names:
+            target_metrics.append(metrics[task_name][metric_name])
+    metrics[f"{cfg.eval.name}_amean"] = torch.as_tensor(target_metrics).mean().item()
+    metrics[f"{cfg.eval.name}_hmean"] = torch.as_tensor(target_metrics).pow(-1).mean().pow(-1).item()
+    log.info(f"Overall average metric on evaluation {cfg.eval.name} is {metrics[f'{cfg.eval.name}_amean']:.2f}.")
+    cramming.utils.wandb_log(
+        {f"{cfg.eval.name}_amean": [metrics[f"{cfg.eval.name}_amean"]], f"{cfg.eval.name}_hmean": [metrics[f"{cfg.eval.name}_hmean"]]},
+        cfg,
+    )
 
     # Save to summary:
     if cramming.utils.is_main_process():
-        cramming.utils.dump_metrics(cfg, metrics)
-        cramming.utils.save_summary("downstream", cfg, metrics, stats, time.time() - local_time, setup)
+        cramming.utils.save_summary("downstream", cfg, stats, time.time() - local_time, setup)
+    return metrics  # will be dumped into yaml
 
 
 @torch.no_grad()
@@ -99,12 +120,24 @@ def validate(model_engine, validloader, metric, setup, cfg):
     for step, batch in enumerate(validloader):
         device_batch = model_engine.to_device(batch, keys=["input_ids", "labels", "attention_mask"])
         _, predictions = model_engine.forward_inference(**device_batch)
-        metric.add_batch(predictions=predictions, references=device_batch["labels"])
+
+        if getattr(metric, "config_name", "") != "multirc":
+            metric.add_batch(predictions=predictions, references=device_batch["labels"])
+        else:  # uuuuuughhhhh, whhyyy multirc
+            pred_indices = range(step * predictions.shape[0], (step + 1) * predictions.shape[0])
+            packages = [dict(idx=validloader.index_lookup[pred_indices[i]], prediction=p) for i, p in enumerate(predictions.cpu())]
+            metric.add_batch(predictions=packages, references=batch["labels"])
+
         if cfg.dryrun and step > 1:
             break
-    eval_metric = metric.compute()
+
+    try:
+        eval_metric = metric.compute()
+    except ValueError:  # pearson corr computation will raise errors if metric values are NaN
+        log.info("Value Error in metrics computation, maybe non-finite values in prediction. Returning backup score.")
+        eval_metric = metric.compute(predictions=[0, 1], references=[1, 0])  # spoof terrible result if metric computation fails
     model_engine.train()
-    return eval_metric
+    return {k: float(v) for k, v in eval_metric.items()}  # force float returns
 
 
 @hydra.main(config_path="cramming/config", config_name="cfg_eval", version_base="1.1")

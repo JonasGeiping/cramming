@@ -49,8 +49,10 @@ def _get_sane_token_args():
     )
 
 
-def _get_sane_normalizers(force_english_keyboard=False, force_lowercase=False, strip_accents=False, whitespace_escape=False):
+def _get_sane_normalizers(force_english_keyboard=False, force_lowercase=False, strip_accents=False, whitespace_escape=False, sanity=False):
     """original rules as in XLNET with optional modifications. force_english_keyboard is actually an ascii normalization."""
+    if sanity:
+        return normalizers.BertNormalizer(lowercase=force_lowercase)
     normalize_ops = []
     normalize_ops.append(normalizers.Replace("``", '"'))
     normalize_ops.append(normalizers.Replace("''", '"'))

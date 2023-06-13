@@ -1,3 +1,8 @@
+#
+# These are instructions for the old, pytorch 1.13, version of the repo, they are not usable on the updated repo and provided only for reference.
+# (but could be easily adapted to the newer format)
+#
+
 
 # # Basic settings:
 python pretrain.py name=amp_b4096_orig_o3 wandb.tags=[o3,arch] data=bookcorpus-wikipedia arch=bert-original train=bert-o3 impl.microbatch_size=64 train.batch_size=4096

@@ -1,0 +1,11 @@
+# The EleutherAI/the_pile_deduplicated
+EleutherAI/the_pile_deduplicated:
+  provider: huggingface
+  partition:
+  split: train
+
+  streaming: True
+
+  # source-specific cleaning rules?
+  remove_columns:
+  concatenate_successive_entries: 0

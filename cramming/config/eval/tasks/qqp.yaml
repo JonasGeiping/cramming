@@ -3,3 +3,5 @@ qqp:
   collection: glue
   regression: False
   structure: [question1, question2]
+
+  target_metrics: ["f1"]

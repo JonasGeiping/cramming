@@ -1,5 +1,5 @@
 # Basic hyperparameter for normal BERT pretraining
-# working hard here to separate "impl" implementation details and "train" abstract hyperparameters
+# working hard here to separate "impl" implementation details and "train" hyperparameters
 
 name: bert-base
 
@@ -7,7 +7,7 @@ defaults:
   - optim: adam
   - optim_mod: disabled
 
-limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight] # no weight decay for these layers
+limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight, norm] # no weight decay for these layers
 
 optim:
   lr: 2e-3
@@ -17,13 +17,13 @@ optim:
     - 0.9
     - 0.98
 
-# steps:
+# Steps:
 warmup_steps: 0.06 # in percentage points
 cooldown_steps: 0
-steps: 600_000 # these are microbatch steps
+steps: 900_000 # these are microbatch steps # This is an upper limit that is usually never reached
 scheduler: budget-linear
 
-# Training settting:
+# Training settings:
 batch_size: 4096 # for mbs=128
 batch_size_ramp: 0
 
@@ -39,13 +39,3 @@ objective:
 reverse_dataset_order: False
 
 budget: ${budget}
-
-gradinit:
-  enabled: False
-  # eta: 1.0
-  # tau: 1e-3 # step size
-  # steps: 50
-  # min_scale: 1e-3
-  # max_scale: 1e3
-  # step_type: sign-grad # sign-grad or grad
-  # second_order: False

@@ -1,0 +1,7 @@
+# dataset-specific settings
+copa:
+  collection: super_glue
+  regression: False
+  structure: [question, premise, choice1, choice2]
+
+  target_metrics: [accuracy]

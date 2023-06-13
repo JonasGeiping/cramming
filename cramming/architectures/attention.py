@@ -1,8 +1,8 @@
-"""Attention modules. Most code heavily stolen from the GPT-neoX implementation"""
+"""Attention modules. The final model uses "self-attention", but other options were tried and are still documented here."""
 import torch
 from transformers.models.bert.modeling_bert import BertSelfAttention
 
-from .embeddings import Rotary, RotarySanityCheck, RotaryEleutherAI
+from .embeddings import Rotary, RotarySanityCheck, RotaryEleutherAI, RotaryLLAMA
 from typing import Optional
 from einops.layers.torch import Rearrange
 from einops import rearrange
@@ -18,6 +18,9 @@ def get_attention_mechanism(
     elif cfg_attention.type == "pytorch":
         # Sanity check 1: [Warning: This includes the output projection twice...]
         mechanism = SelfAttentionPyTorch(hidden_size, cfg_attention)  # torch default
+    elif cfg_attention.type == "pytorch-seqfirst":
+        # Sanity check 1: [Warning: This includes the output projection twice...]
+        mechanism = SeqFirstSelfAttentionPyTorch(hidden_size, cfg_attention)  # torch default
     elif cfg_attention.type == "huggingface":
         mechanism = BertAttentionWrapper(hidden_size, cfg_attention)  # always includes bias!
     elif cfg_attention.type == "flash-attention-impl":  # the fast implementation called flash
@@ -51,6 +54,7 @@ def get_attention_mechanism(
 class Identity(torch.nn.Module):
     """mini wrapper around BERT attention from huggingface for sanity checks."""
 
+    __constants__ = ["LAYOUT"]
     LAYOUT = "[B S H]"
 
     def __init__(self, hidden_size):
@@ -64,6 +68,7 @@ class Identity(torch.nn.Module):
 class BertAttentionWrapper(BertSelfAttention):
     """mini wrapper around BERT attention from huggingface for sanity checks."""
 
+    __constants__ = ["LAYOUT"]
     LAYOUT = "[B S H]"
 
     def __init__(self, hidden_size, cfg_attention):
@@ -85,6 +90,7 @@ class BertAttentionWrapper(BertSelfAttention):
 class SelfAttentionPyTorch(torch.nn.Module):
     """Minimal wrapper around pytorch self attention."""
 
+    __constants__ = ["LAYOUT"]
     LAYOUT = "[B S H]"
 
     def __init__(self, hidden_size, cfg_attention):
@@ -109,8 +115,36 @@ class SelfAttentionPyTorch(torch.nn.Module):
         return self.attn(hidden_states, hidden_states, hidden_states, attn_mask=attention_mask, need_weights=False)[0]
 
 
-class SeqFirstSelfAttention(torch.nn.Module):
-    """Self-attention layer abstract class.
+class SeqFirstSelfAttentionPyTorch(torch.nn.Module):
+    """Minimal wrapper around pytorch self attention."""
+
+    __constants__ = ["LAYOUT"]
+    LAYOUT = "[S B H]"
+
+    def __init__(self, hidden_size, cfg_attention):
+        super().__init__()
+        self.attn = torch.nn.MultiheadAttention(
+            hidden_size,
+            cfg_attention.num_attention_heads,
+            dropout=cfg_attention.dropout_prob,
+            batch_first=False,
+            bias=False,
+            add_bias_kv=cfg_attention.qkv_bias,
+        )
+
+        # Do something terrible to patch the fact that the output projection is somewhere else in our code:
+        del self.attn.out_proj.weight
+        del self.attn.out_proj.bias
+        self.attn.out_proj.register_buffer("weight", torch.eye(hidden_size))
+        self.attn.out_proj.register_buffer("bias", torch.zeros(hidden_size))
+        self.output_dim = hidden_size
+
+    def forward(self, hidden_states, attention_mask: Optional[torch.Tensor] = None):
+        return self.attn(hidden_states, hidden_states, hidden_states, attn_mask=attention_mask, need_weights=False)[0]
+
+
+class LegacySeqFirstSelfAttention(torch.nn.Module):
+    """Self-attention layer.
 
     This is the gpt neo-x implementation from:
     https://github.com/EleutherAI/gpt-neox/blob/main/megatron/model/transformer.py (which is a megatron variant)
@@ -134,17 +168,13 @@ class SeqFirstSelfAttention(torch.nn.Module):
         self.query_key_value = torch.nn.Linear(self.hidden_size, 3 * self.hidden_size, bias=cfg_attention.qkv_bias)
         self.output_dim = hidden_size
         if cfg_attention.rotary_embedding == "sanity":
-            if cfg_attention.low_level_fusion:
-                self.rotary_emb = torch.jit.script(RotarySanityCheck(self.hidden_per_head, seq_dim=0))
-            else:
-                self.rotary_emb = RotarySanityCheck(self.hidden_per_head, seq_dim=0)
+            self.rotary_emb = RotarySanityCheck(self.hidden_per_head, seq_dim=0)
         elif cfg_attention.rotary_embedding == "v2":
             self.rotary_emb = RotaryEleutherAI(self.hidden_per_head)
+        elif cfg_attention.rotary_embedding == "llama":
+            self.rotary_emb = RotaryLLAMA(self.hidden_per_head)
         elif cfg_attention.rotary_embedding:
-            if cfg_attention.low_level_fusion:
-                self.rotary_emb = torch.jit.script(Rotary(self.hidden_per_head, seq_dim=0))
-            else:
-                self.rotary_emb = Rotary(self.hidden_per_head, seq_dim=0)
+            self.rotary_emb = Rotary(self.hidden_per_head, seq_dim=0)
         else:
             self.rotary_emb = None
 
@@ -160,8 +190,6 @@ class SeqFirstSelfAttention(torch.nn.Module):
             self.sequence_op = CumsumExp(cfg_attention.seq_op_in_fp32)
         else:
             raise ValueError(f"Invalid sequence operation {cfg_attention.sequence_op} given.")
-        if cfg_attention.low_level_fusion:
-            self.sequence_op = torch.jit.script(self.sequence_op)
 
         self.attention_dropout: float = cfg_attention.dropout_prob
 
@@ -262,6 +290,72 @@ class SeqFirstSelfAttention(torch.nn.Module):
         # [sq, b, np, hn] --> [sq, b, hp]
         # new_context_layer_shape = context_layer.size()[:-2] + (self.hidden_size,)
         context_layer = context_layer.view(context_layer.shape[0], context_layer.shape[1], self.hidden_size)
+        return context_layer
+
+
+class SeqFirstSelfAttention(LegacySeqFirstSelfAttention):
+    """Self-attention layer.
+
+    This is the gpt neo-x implementation from:
+    https://github.com/EleutherAI/gpt-neox/blob/main/megatron/model/transformer.py (which is a megatron variant)
+
+    This is a modified version of the neo-x implementation that I can manage to compile without graph breaks
+    """
+
+    __constants__ = ["LAYOUT", "attention_dropout"]
+    LAYOUT: str = "[S B H]"
+    norm_factor: torch.Tensor
+
+    def attention(self, query_layer, key_layer, value_layer, attention_mask: Optional[torch.Tensor] = None, training: bool = False):
+        # ===================================
+        # Raw attention scores. [b, np, s, s]
+        # ===================================
+
+        # [b, np, sq, sk]
+        output_size = (query_layer.shape[1], query_layer.shape[2], query_layer.shape[0], key_layer.shape[0])
+
+        # [sq, b, np, hn] -> [sq, b * np, hn]
+        query_layer = query_layer.view(output_size[2], output_size[0] * output_size[1], -1)
+        key_layer = key_layer.view(output_size[3], output_size[0] * output_size[1], -1)
+
+        # this better be fused in a clever way:
+        matmul_result = torch.bmm(query_layer.transpose(0, 1), key_layer.transpose(0, 1).transpose(1, 2)) * self.norm_factor
+
+        # change view to [b, np, sq, sk]
+        attention_scores = matmul_result.view(output_size[0], output_size[1], output_size[2], output_size[3])
+
+        # ===========================
+        # Attention probs and dropout
+        # ===========================
+        # attention scores and attention mask [b, np, sq, sk]
+        attention_probs = self.sequence_op(attention_scores, attention_mask)
+
+        # This is actually dropping out entire tokens to attend to, which might
+        # seem a bit unusual, but is taken from the original Transformer paper.
+        # [And in great ML tradition I keep this comment in place as it was in megatron and huggingface-bert before :>]
+        # attention_probs = self.attention_dropout(attention_probs)
+        attention_probs = torch.nn.functional.dropout(attention_probs, p=self.attention_dropout, training=training)
+        # =========================
+        # Context layer. [sq, b, hp]
+        # =========================
+
+        # value_layer -> context layer.
+        # [sk, b, np, hn] --> [b, np, sq, hn]
+
+        # context layer shape: [b, np, sq, hn]
+        output_size = (value_layer.shape[1], value_layer.shape[2], query_layer.shape[0], value_layer.shape[3])
+
+        # change view [sk, b * np, hn]
+        value_layer = value_layer.view(value_layer.size(0), output_size[0] * output_size[1], -1)
+
+        # change view [b * np, sq, sk]
+        attention_probs = attention_probs.view(output_size[0] * output_size[1], output_size[2], -1)
+
+        # matmul: [b * np, sq, hn]
+        context_layer = torch.bmm(attention_probs, value_layer.transpose(0, 1))
+
+        # change view [b, np, sq, hn]
+        context_layer = context_layer.view(*output_size)
         return context_layer
 
 

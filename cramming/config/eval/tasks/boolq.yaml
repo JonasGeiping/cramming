@@ -1,0 +1,7 @@
+# dataset-specific settings
+boolq:
+  collection: super_glue
+  regression: False
+  structure: [question, passage]
+
+  target_metrics: [accuracy]

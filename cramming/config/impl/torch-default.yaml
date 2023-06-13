@@ -1,4 +1,4 @@
-# singl(ish) GPU, sane pytorch stuff
+# single/multi GPU, sane(?) pytorch parameters
 name: torch-default
 defaults:
   - _default
@@ -6,17 +6,46 @@ defaults:
 
 mixed_precision: True # turns on AMP on GPUs/Intel devices. The default precision needs to be float
 grad_scaling: True # Only activates when mixed_precision=True
-mixed_precision_target_dtype: float16
+mixed_precision_target_dtype: float16 # you might try your luck with bfloat16 too
 
 # Distributed training:
 zero_redundancy_optimizer: False # requires limited_decay_keys=[] for pytorch<=1.10.2
 broadcast_buffers: False
 bucket_cap_mb: 25
 gradient_as_bucket_view: True
-static_graph: True
+static_graph: False # turned off for inductor
 
 # Misc:
 foreach_optimizer: False
 
-# Dynamo
-optimizer_context: # can be: aot_autograd_speedup, nvfuser_global, aot_nvfuser
+# Compilation
+compile_torch: True
+mode: # overwritten by manual selection of inductor variables below
+dynamic: False # this is a world of pain (when I last tested it, around torch2.0 release)
+fullgraph: True # why even compile when not compile everywhere :>
+backend: inductor # use eager here when using the old bert-cX models
+_inductor_vars:
+  max_autotune_gemm: True
+  max_autotune_pointwise: False # was better in some tests not to enable this?
+  triton:
+    cudagraphs: True
+    cudagraph_trees: False # not working with multiprocessing on May19th nightly
+  # epilogue_fusion: True # true by default in latest nightly
+  # aggressive_fusion: False # oom on latest nightly
+  permute_fusion: True # nice
+  shape_padding: True # flaky on the new nightly?
+  # optional to mess with the internal inductor config. Maybe not advisable
+  # - `epilogue_fusion` which fuses pointwise ops into templates. Requires `max_autotune` to also be set
+  # - `max_autotune` which will profile to pick the best matmul configuration
+  # - `fallback_random` which is useful when debugging accuracy issues
+  # - `shape_padding` which pads matrix shapes to better align loads on GPUs especially for tensor cores
+  # - `triton.cudagraphs` which will reduce the overhead of python with CUDA graphs
+  # - `trace.enabled` which is the most useful debugging flag to turn on
+  # - `trace.graph_diagram` which will show you a picture of your graph after fusion
+  # - For inductor you can see the full list of configs that it supports by calling `torch._inductor.list_options()`
+  # or directly at https://github.com/pytorch/pytorch/blob/master/torch/_inductor/config.py
+
+# scaled dot products:
+enable_mem_efficient_sdp: True
+enable_math_sdp: True
+enable_flash_sdp: True

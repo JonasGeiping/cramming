@@ -1,0 +1,8 @@
+type: Sophia-G
+
+lr: 1e-3
+betas:
+  - 0.965
+  - 0.99
+weight_decay: 0.1
+rho: 0.04

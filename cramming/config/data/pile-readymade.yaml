@@ -1,0 +1,11 @@
+# Draw a preprocessed dataset directly from my HF profile.
+# This dataset is already tokenized, you "have" to load the correct tokenizer (which happens automatically with data.load_pretraining_corpus)
+name: pile-readymade
+sources:
+  hub:
+    provider: hub
+hf_location: JonasGeiping/the_pile_WordPiecex32768_2efdb9d060d1ae95faf952ec1a50f020
+streaming: True
+
+vocab_size: 32768 # cannot be changed!
+seq_length: 128 # cannot be changed!

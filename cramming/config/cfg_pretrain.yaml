@@ -1,9 +1,9 @@
 # Configuration defaults
 # Settings are separated into hyperparameters for architecture, data, implementation and train/eval hyperparams
-# default settings run a sanity check with a small model and test data.
+# These are defaults for a small test, not for the crammed model!
 defaults:
   - arch: hf-bert-tiny
-  - data: sanity-check-2 #bookcorpus-wikipedia
+  - data: sanity-check-2
   - impl: torch-default
   - wandb: none
   - train: bert-base

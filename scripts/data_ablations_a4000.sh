@@ -1,4 +1,8 @@
-# Run on an A4000
+#
+# These are instructions for the old, pytorch 1.13, version of the repo, they are not usable on the updated checkpoint and provided only for reference.
+# (but could be easily adapted to the newer format)
+#
+
 
 #
 # final

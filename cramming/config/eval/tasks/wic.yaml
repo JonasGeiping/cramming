@@ -1,0 +1,7 @@
+# dataset-specific settings
+wic:
+  collection: super_glue
+  regression: False
+  structure: [word, sentence1, sentence2] # start1, start2, end1, end2
+
+  target_metrics: [accuracy]

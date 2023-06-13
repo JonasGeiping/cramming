@@ -1,0 +1,13 @@
+# Big runs :)
+# Final crammed-bert model:
+torchrun --nproc_per_node=8 --standalone pretrain.py name=G8_A4000amp_b8192_cb_o4_final wandb.tags=[o4,final,cb,pile] arch=crammed-bert train=bert-o4 impl.microbatch_size=128 data=the-pile data.remove_trash=True data.ordering=sentence-length-curriculum data.deduplicate_entries=False budget=71.5 impl.fullgraph=false impl._inductor_vars.triton.cudagraphs=False
+# python eval.py eval=GLUE_sane name=G8_A6000amp_b8192_cb_o4_final wandb.tags=[pile,o4,cb] eval.checkpoint=latest impl.microbatch_size=16 impl.shuffle_in_dataloader=True eval.scheduler=cosine-decay eval.epochs=5 eval.batch_size=16 eval.optim.lr=4e-5 impl.compile_torch=False
+
+torchrun --nproc_per_node=8 --standalone pretrain.py name=G8_A4000amp_b8192_cb_o4_final_noclip wandb.tags=[o4,final,cb,pile] arch=crammed-bert train=bert-o4 impl.microbatch_size=128 data=the-pile data.remove_trash=True data.ordering=sentence-length-curriculum data.deduplicate_entries=False budget=71.5 train.gradient_clipping=null impl.fullgraph=false impl._inductor_vars.triton.cudagraphs=False
+# python eval.py eval=GLUE_sane name=G8_A6000amp_b8192_cb_o4_final_noclip wandb.tags=[pile,o4,cb] eval.checkpoint=latest impl.microbatch_size=16 impl.shuffle_in_dataloader=True eval.scheduler=cosine-decay eval.epochs=5 eval.batch_size=16 eval.optim.lr=4e-5 impl.compile_torch=False
+
+torchrun --nproc_per_node=8 --standalone pretrain.py name=G8_A4000amp_b8192_cb_o4_final_shuf wandb.tags=[o4,final,cb,pile] arch=crammed-bert train=bert-o4 impl.microbatch_size=128 data=the-pile data.remove_trash=True data.ordering=sentence-length-curriculum data.deduplicate_entries=False budget=71.5 impl.fullgraph=false impl._inductor_vars.triton.cudagraphs=False impl.shuffle_in_dataloader=True
+# python eval.py eval=GLUE_sane name=G8_A6000amp_b8192_cb_o4_final wandb.tags=[pile,o4,cb] eval.checkpoint=latest impl.microbatch_size=16 impl.shuffle_in_dataloader=True eval.scheduler=cosine-decay eval.epochs=5 eval.batch_size=16 eval.optim.lr=4e-5 impl.compile_torch=False
+
+torchrun --nproc_per_node=8 --standalone pretrain.py name=G8_A4000amp_b8192_cb_o4_final_noclip_shuf wandb.tags=[o4,final,cb,pile] arch=crammed-bert train=bert-o4 impl.microbatch_size=128 data=the-pile data.remove_trash=True data.ordering=sentence-length-curriculum data.deduplicate_entries=False budget=71.5 train.gradient_clipping=null impl.fullgraph=false impl._inductor_vars.triton.cudagraphs=False impl.shuffle_in_dataloader=True
+# python eval.py eval=GLUE_sane name=G8_A6000amp_b8192_cb_o4_final_noclip wandb.tags=[pile,o4,cb] eval.checkpoint=latest impl.microbatch_size=16 impl.shuffle_in_dataloader=True eval.scheduler=cosine-decay eval.epochs=5 eval.batch_size=16 eval.optim.lr=4e-5 impl.compile_torch=False

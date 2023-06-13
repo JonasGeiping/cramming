@@ -1,4 +1,4 @@
-"""Non-standard embedding implementations."""
+"""Standard and Non-standard embedding implementations. Several implementation variations of rotary embeddings."""
 import torch
 import math
 
@@ -91,7 +91,7 @@ class Rotary(torch.nn.Module):
 
         def rope_fn(cos: torch.Tensor, sin: torch.Tensor, query_layer: torch.Tensor, key_layer: torch.Tensor):
             QK = torch.cat([query_layer, key_layer], dim=1)
-            rotated = QK * cos + rotate_half(QK) * sin
+            rotated = QK * cos[: QK.shape[0]] + rotate_half(QK) * sin[: QK.shape[0]]
             return torch.split(QK, query_layer.shape[1], dim=1)
 
         self.rope_fn = rope_fn  # handle fusion on module level
@@ -228,26 +228,62 @@ class RotaryEleutherAI(torch.nn.Module):
         # self._cos_cached, self._sin_cached = self._update_cos_sin_tables(k, seq_dimension=seq_dimension)
 
         return (
-            apply_rotary_pos_emb(q, self._cos_cached, self._sin_cached, seq_dimension),
-            apply_rotary_pos_emb(k, self._cos_cached, self._sin_cached, seq_dimension),
+            self.apply_rotary_pos_emb(q, self._cos_cached, self._sin_cached, seq_dimension),
+            self.apply_rotary_pos_emb(k, self._cos_cached, self._sin_cached, seq_dimension),
         )
 
+    @staticmethod
+    def rotate_half(x: torch.Tensor):
+        x = x.unflatten(dim=-1, sizes=(-1, 2))
+        x1, x2 = x.unbind(dim=-1)
+        rotated_x = torch.stack((-x2, x1), dim=-1)
+        return rotated_x.flatten(start_dim=-2)
 
-def rotate_half(x: torch.Tensor):
-    x = x.unflatten(dim=-1, sizes=(-1, 2))
-    x1, x2 = x.unbind(dim=-1)
-    rotated_x = torch.stack((-x2, x1), dim=-1)
-    return rotated_x.flatten(start_dim=-2)
+    @staticmethod
+    def apply_rotary_pos_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, seq_dimension: int = -2):
+        # NOTE: This could probably be moved to Triton
+
+        # Handle a possible sequence length mismatch in between q and k
+        cos = cos[: x.shape[seq_dimension], :]
+        sin = sin[: x.shape[seq_dimension], :]
+        if seq_dimension == -3:
+            cos = cos[:, None, :]
+            sin = sin[:, None, :]
+        return (x * cos) + (rotate_half(x) * sin)
 
 
-@torch.jit.script
-def apply_rotary_pos_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, seq_dimension: int = -2):
-    # NOTE: This could probably be moved to Triton
+class RotaryLLAMA(torch.nn.Module):
+    """Facebook implementation of rotary embeddings."""
 
-    # Handle a possible sequence length mismatch in between q and k
-    cos = cos[: x.shape[seq_dimension], :]
-    sin = sin[: x.shape[seq_dimension], :]
-    if seq_dimension == -3:
-        cos = cos[:, None, :]
-        sin = sin[:, None, :]
-    return (x * cos) + (rotate_half(x) * sin)
+    def __init__(self, hidden_per_head, base=10000, max_seq_length=512, seq_dim: int = 0):
+        super().__init__()
+        self.seq_dim: int = seq_dim
+        freqs_cis = self.precompute_freqs_cis(dim=hidden_per_head, end=max_seq_length * 2, theta=base)
+        self.register_buffer("freqs_cis", freqs_cis)
+
+    def forward(self, query_layer: torch.Tensor, key_layer: torch.Tensor):
+        return self.apply_rotary_emb(query_layer, key_layer, freqs_cis=self.freqs_cis)
+
+    def apply_rotary_emb(self, xq: torch.Tensor, xk: torch.Tensor, freqs_cis: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+        xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+        freqs_cis = self.reshape_for_broadcast(freqs_cis, xq_)
+
+        xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
+        xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+        return xq_out.type_as(xq), xk_out.type_as(xk)
+
+    def reshape_for_broadcast(self, freqs_cis: torch.Tensor, x: torch.Tensor):
+        freqs_cis = freqs_cis[: x.shape[self.seq_dim]]
+        # shape = [d if i == 1 or i == x.ndim - 1 else 1 for i, d in enumerate(x.shape)]
+        # shape = [1, seq_length, 1, hidden_per_head]
+        shape = [s if i == self.seq_dim or i == x.ndim - 1 else 1 for i, s in enumerate(x.shape)]
+        return freqs_cis.view(*shape)
+
+    @staticmethod
+    def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
+        freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+        t = torch.arange(end, device=freqs.device)  # type: ignore
+        freqs = torch.outer(t, freqs).float()  # type: ignore
+        freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
+        return freqs_cis

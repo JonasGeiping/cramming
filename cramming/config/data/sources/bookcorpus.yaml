@@ -1,7 +1,7 @@
 # The bookcorpus dataset, drawn from it huggingface mirror
 bookcorpus:
   provider: huggingface
-  partition: plain_text
+  name: plain_text
   split: train
 
   streaming: False

@@ -1,13 +1,13 @@
 """Basic transformer components."""
 
 import torch
+import math
 
 from typing import Optional, Tuple
-
 from functools import partial
+
 from .embeddings import SinusoidalPositional, LearnablePositional, ScaledSinosoidal
-from .attention import get_attention_mechanism, FLASH
-from .fused_layers import get_layer_fn
+from .attention import get_attention_mechanism
 
 INPLACE = False
 
@@ -26,31 +26,35 @@ class EmbeddingComponent(torch.nn.Module):
             self.pos_embedding = ScaledSinosoidal(cfg_embedding.embedding_dim, cfg_embedding.max_seq_length)
         else:
             self.pos_embedding = None
-        #
-        # if cfg_embedding.fusion:
-        #    self.pos_embedding = torch.jit.script(self.pos_embedding)
-        # Do not fuse here!
-        # fusing here breaks everything and the model stalls at cross-entropy loss of 7
-        #
+
         self.dropout = torch.nn.Dropout(p=cfg_embedding.dropout_prob, inplace=INPLACE)
         if cfg_embedding.normalization:
+            self.stabilize_low_precision = cfg_embedding.get("stable_low_precision", False)
             self.norm = _get_norm_fn(norm)(cfg_embedding.embedding_dim, eps=norm_eps)
         else:
+            self.stabilize_low_precision = False
             self.norm = torch.nn.Identity()
 
     def forward(self, input_ids):
         embeds = self.word_embedding(input_ids)
         if self.pos_embedding is not None:
             embeds += self.pos_embedding(input_ids)
-        return self.dropout(self.norm(embeds))
+
+        if self.stabilize_low_precision:
+            # Stabilize as in bnb StableEmbedding
+            return self.dropout(self.norm(embeds.to(torch.get_default_dtype()))).to(embeds.dtype)
+        else:
+            return self.dropout(self.norm(embeds))
 
 
 class AttentionComponent(torch.nn.Module):
     def __init__(self, idx, hidden_size, cfg_attention, use_bias=True):
         super().__init__()
         self.self_attention = get_attention_mechanism(idx, hidden_size, cfg_attention)
+
         if cfg_attention.high_level_fusion:
             self.self_attention = torch.jit.script(self.self_attention)
+
         if cfg_attention.skip_output_projection:
             self.dense = torch.nn.Identity()
         else:
@@ -81,96 +85,6 @@ class FFNComponent(torch.nn.Module):
 
     def forward(self, hidden_states):
         return self.dense_out(self.nonlin(self.dense_in(hidden_states)))
-
-
-class TransformerLayer(torch.nn.Module):
-    """A transformer-encoder structure based on the components from above."""
-
-    def __init__(self, idx, cfg_arch):
-        super().__init__()
-        self.dropout = torch.nn.Dropout(cfg_arch.hidden_dropout_prob, inplace=INPLACE)
-        self.norm1 = _get_norm_fn(cfg_arch.norm)(cfg_arch.hidden_size, eps=cfg_arch.norm_eps)
-        self.norm2 = _get_norm_fn(cfg_arch.norm)(cfg_arch.hidden_size, eps=cfg_arch.norm_eps)
-        self.attn = AttentionComponent(
-            idx,
-            cfg_arch.hidden_size,
-            cfg_arch.attention,
-            cfg_arch.use_bias,
-        )
-        nonlin_fn = _get_nonlin_fn(cfg_arch.nonlin)
-        if (idx + 1) % cfg_arch.ffn_layer_frequency == 0:
-            self.ffn = FFNComponent(
-                cfg_arch.hidden_size,
-                cfg_arch.intermed_size,
-                nonlin_fn,
-                cfg_arch.use_bias,
-            )
-        else:
-            self.ffn = torch.nn.Identity()
-
-        self.norm_scheme = cfg_arch.norm_scheme
-        if self.norm_scheme == "sandwich":
-            self.norm3 = _get_norm_fn(cfg_arch.norm)(cfg_arch.hidden_size, eps=cfg_arch.norm_eps)
-            self.norm4 = _get_norm_fn(cfg_arch.norm)(cfg_arch.hidden_size, eps=cfg_arch.norm_eps)
-            self.fn = get_layer_fn(
-                type="sandwich", scripting=cfg_arch.layer_fusion, dn=cfg_arch.deepnorm_scaling, drop=cfg_arch.layer_drop_theta
-            )
-        else:
-            self.fn_training, self.fn_eval = get_layer_fn(
-                self.norm_scheme,
-                prob=cfg_arch.hidden_dropout_prob,
-                scripting=cfg_arch.layer_fusion,
-                dn=cfg_arch.deepnorm_scaling,
-                drop=cfg_arch.layer_drop_theta,
-            )
-
-        if cfg_arch.deepnorm_scaling:
-            self.register_buffer("alpha", torch.tensor(2 * cfg_arch.num_transformer_layers).pow(0.25))
-        else:
-            self.register_buffer("alpha", torch.tensor(1.0))
-
-        self.LAYOUT = self.attn.LAYOUT
-
-    def forward(self, states, attention_mask: Optional[torch.Tensor] = None, res_scale=1):
-        if self.norm_scheme == "pre":  # On Layer Normalization in the Transformer Architecture
-            if self.training:
-                states = self.fn_training(states, self.attn(self.norm1(states), attention_mask), self.alpha, res_scale)
-                states = self.fn_training(states, self.ffn(self.norm2(states)), self.alpha, res_scale)
-            else:
-                states = self.fn_eval(states, self.attn(self.norm1(states), attention_mask), self.alpha, res_scale)
-                states = self.fn_eval(states, self.ffn(self.norm2(states)), self.alpha, res_scale)
-
-        elif self.norm_scheme == "sandwich":
-            states = self.fn(states, self.norm3(self.dropout(self.attn(self.norm1(states), attention_mask))), self.alpha, res_scale)
-            states = self.fn(states, self.norm4(self.dropout(self.ffn(self.norm2(states)))), self.alpha, res_scale)
-        else:
-            if self.training:
-                states = self.norm1(self.fn_training(states, self.attn(states, attention_mask), self.alpha, res_scale))
-                states = self.norm2(self.fn_training(states, self.ffn(states), self.alpha, res_scale))
-            else:
-                states = self.norm1(self.fn_eval(states, self.attn(states, attention_mask), self.alpha, res_scale))
-                states = self.norm2(self.fn_eval(states, self.ffn(states), self.alpha, res_scale))
-
-        return states
-
-
-class FLASHLayer(torch.nn.Module):
-    """A FLASH-quad layer."""
-
-    def __init__(self, idx, cfg_arch):
-        super().__init__()
-        self.norm = _get_norm_fn(cfg_arch.norm)(cfg_arch.hidden_size, eps=cfg_arch.norm_eps)
-        self.attn = FLASH(cfg_arch.hidden_size, cfg_arch.attention)
-
-        self.norm_scheme = cfg_arch.norm_scheme
-        self.LAYOUT = self.attn.LAYOUT
-
-    def forward(self, states, attention_mask: Optional[torch.Tensor] = None, res_scale=1):
-        if self.norm_scheme == "pre":  # On Layer Normalization in the Transformer Architecture
-            states = states + self.attn(self.norm(states), attention_mask)
-        else:
-            states = self.norm(states + self.attn(states, attention_mask))
-        return states
 
 
 class PoolingComponent(torch.nn.Module):
@@ -216,20 +130,11 @@ class PredictionHeadComponent(torch.nn.Module):
         return hidden_states
 
 
-def _get_layer_fn(layer_macro_type):
-    if layer_macro_type == "transformer":
-        return TransformerLayer
-    elif layer_macro_type == "FLASH":
-        return FLASHLayer
-    else:
-        raise ValueError(f"Invalid layer type {layer_macro_type} given.")
-
-
 def _get_norm_fn(norm_name):
     if norm_name == "ScaleNorm":
-        norm_fn = ScriptedScaleNorm
+        norm_fn = ScaleNorm
     elif norm_name == "RMSNorm":
-        norm_fn = ScriptedRMSNorm
+        norm_fn = RMSNorm
     elif norm_name == "ApexLayerNorm":
         from apex.normalization import FusedLayerNorm
 
@@ -253,13 +158,9 @@ def _get_nonlin_fn(nonlin_name, use_gating=True):
         nonlin_fn = getattr(torch.nn, nonlin_name)
 
     if wrap_in_glu:
-        return partial(ScriptedGLU, nonlin_fn)
+        return partial(GLU, nonlin_fn)
     else:
         return nonlin_fn
-
-
-def ScriptedGLU(*args, **kwargs):
-    return torch.jit.script(GLU(*args, **kwargs))
 
 
 class GLU(torch.nn.Module):
@@ -275,14 +176,6 @@ class GLU(torch.nn.Module):
     def forward(self, inputs):
         x, gate = inputs.chunk(2, dim=-1)
         return self.sub_activation(gate) * x
-
-
-def ScriptedScaleNorm(hidden_size: int, eps: float = 1e-5):
-    return torch.jit.script(ScaleNorm(hidden_size, eps))
-
-
-def ScriptedRMSNorm(hidden_size: int, eps: float = 1e-8):
-    return torch.jit.script(RMSNorm(hidden_size, eps))
 
 
 class ScaleNorm(torch.nn.Module):
@@ -305,14 +198,22 @@ class ScaleNorm(torch.nn.Module):
 class RMSNorm(torch.nn.Module):
     """The RMS variant of scaling norms."""
 
-    def __init__(self, hidden_size: int, eps: float = 1e-8):
+    def __init__(self, hidden_size: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
         self.learnable_scale = torch.nn.Parameter(torch.ones(hidden_size) ** -0.5)
 
-    def forward(self, inputs):
+    def _legacy_forward(self, inputs):
         """This is the same eps clipping as in the original ScaleNorm implementation."""
-        return inputs * self.learnable_scale / torch.norm(inputs, dim=-1, keepdim=True).clamp(min=self.eps)
+        return inputs * self.learnable_scale / torch.norm(inputs, dim=-1, keepdim=True).clamp(min=1e-8)
+
+    def _norm(self, x):
+        """LLama implementation"""
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float()).type_as(x)
+        return output * self.learnable_scale
 
 
 class Sequential(torch.nn.Module):
@@ -376,3 +277,62 @@ def get_extended_attention_mask(attention_mask: torch.Tensor, input_shape: Tuple
     # extended_attention_mask = extended_attention_mask.to(dtype=self.setup["dtype"])  # fp16 compatibility
     extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
     return extended_attention_mask
+
+
+"""Collect inits."""
+
+
+@torch.no_grad()
+def _init_module(module, init_method="normal", init_std=0.02, hidden_size=768, num_layers=12):
+
+    if init_method == "normal":
+        std = init_std
+    elif init_method == "small":
+        # Transformers without Tears: Improving
+        # the Normalization of Self-Attention - Nguyen, T. & Salazar, J. (2010)
+        std = torch.as_tensor(2 / (5 * hidden_size)).sqrt()
+    elif init_method == "megatron":
+        std = torch.as_tensor(1 / (3 * hidden_size)).sqrt()
+    elif init_method == "wang":
+        std = 2 / num_layers / torch.as_tensor(hidden_size).sqrt()
+    elif init_method == "deepnorm":
+        std = torch.as_tensor(8 * num_layers).pow(-0.25)  # todo: apply this only to some layers
+    elif init_method == "agd-orthogonal":
+        std = init_std  # no std modification necessary, setting to default
+    else:
+        raise ValueError(f"Invalid init method {init_method} given.")
+
+    if isinstance(module, torch.nn.Linear):
+        # Slightly different from the TF version which uses truncated_normal for initialization
+        # cf https://github.com/pytorch/pytorch/pull/5617
+        module.weight.data.normal_(mean=0.0, std=std)
+        if module.bias is not None:
+            module.bias.data.zero_()
+    elif isinstance(module, torch.nn.Embedding):
+        module.weight.data.normal_(mean=0.0, std=std)
+        if module.padding_idx is not None:
+            module.weight.data[module.padding_idx].zero_()
+    elif isinstance(module, torch.nn.LayerNorm):
+        module.bias.data.zero_()
+        module.weight.data.fill_(1.0)
+
+    if init_method == "agd-orthogonal":
+        for name, p in module.named_parameters():
+            if p.dim() == 1:
+                print(f"WARNING: Biases are not supported. This breaks scaling of parameter {name} in theory.")
+            if p.dim() == 2:
+                torch.nn.init.orthogonal_(p)
+                p *= singular_value(p.shape)
+            if p.dim() == 4:
+                for kx in range(p.shape[2]):
+                    for ky in range(p.shape[3]):
+                        torch.nn.init.orthogonal_(p[:, :, kx, ky])
+                p *= singular_value(p.shape)
+
+
+def singular_value(p_shape):
+    """requires hashable input"""
+    sv = math.sqrt(p_shape[0] / p_shape[1])
+    if len(p_shape) == 4:
+        sv /= math.sqrt(p_shape[2] * p_shape[3])
+    return sv

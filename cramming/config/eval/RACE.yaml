@@ -1,0 +1,46 @@
+defaults:
+  - optim: adam
+  - tasks:
+      - race
+
+optim:
+  lr: 1e-5
+  weight_decay: 0.1 # roberta hyperparams
+
+name: RACE
+evaluation_set: validation # always keep this at validation except for the final run
+
+# checkpoint name:
+# This can be either "latest", or a reference to a specific checkpoint in a subfolder
+checkpoint: latest
+path: ${impl.path} # Path for caches of datasets and tokenizers
+max_seq_length: 1024
+
+# Default options:
+# These can be overwritten by specific tasks
+batch_size: 16
+batch_size_ramp: 0
+
+gradient_clipping:
+limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight, norm]
+scheduler: cosine-decay
+optim_mod:
+  name: none
+
+epochs: 5
+
+# These options are only used for scheduling:
+warmup_steps: 0.1
+cooldown_steps: 0
+steps:
+
+testing:
+  batch_size: 128
+
+arch_modifications:
+  classification_head:
+    pooler: zero_index
+    include_ff_layer: True
+    # head_dim: ${arch.hidden_size}
+    nonlin: Tanh
+    # classifier_dropout: ${arch.hidden_dropout_prob}

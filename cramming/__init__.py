@@ -1,9 +1,10 @@
 """Initialize cramming"""
 
+from cramming import utils
 from cramming.architectures import construct_model
 from cramming.backend import load_backend
 from cramming.data import load_pretraining_corpus, prepare_task_dataloaders
-from cramming import utils
+
 
 __all__ = [
     "construct_model",

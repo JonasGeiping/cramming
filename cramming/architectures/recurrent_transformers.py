@@ -1,9 +1,10 @@
-"""A more detailed implementation of recurrent stuff, extending the simple recurrent block implementation in scriptable_bert.py"""
+"""An implementation of a depth-recurrent transformer."""
 
 
 import torch
 from typing import Optional
 from random import randrange
+from transformers import PretrainedConfig
 
 # import torchdynamo
 
@@ -15,34 +16,45 @@ from .components import (
     get_extended_attention_mask,
     _get_norm_fn,
     _get_nonlin_fn,
-    get_layer_fn,
+    _init_module,
 )
-from .scriptable_bert import ScriptableLMForSequenceClassification, _init_module
 
 INPLACE = False
 
 
+class crammedRecurrentConfig(PretrainedConfig):
+    model_type = "crammedRecurrent"
+
+    def __init__(self, cfg_arch_container: dict = {}, **kwargs):
+        self.arch = cfg_arch_container
+        super().__init__(**kwargs)
+
+
 def construct_scriptable_recurrent(cfg_arch, vocab_size, downstream_classes=None):
     """See the config file for details on what is possible."""
-    cfg_arch.embedding.vocab_size = vocab_size
-    cfg_arch.num_labels = downstream_classes
+    config = crammedRecurrentConfig(OmegaConf.to_container(cfg_arch, resolve=True))
+    config.embedding.vocab_size = vocab_size
+    config.num_labels = downstream_classes
 
     if downstream_classes is None:
-        model = BPTTforPreTraining(ScriptableRecurrentLM(cfg_arch), cfg_arch)
+        if config.arch["objective_layout"] == "MLM":
+            model = BPTTforPreTraining(config)
+        else:
+            raise ValueError(f"Invalid layout {config.arch['objective_layout']} of training objective given.")
     else:
-        model = ScriptableLMForSequenceClassification(ScriptableRecurrentLM(cfg_arch), cfg_arch)
+        raise ValueError("Not yet implemented for 2.0")
     return model
 
 
 """This is the simplified version that should be the default for all models later..."""
 
 
-class TransformerLayerSimplified(torch.nn.Module):
+class TransformerLayer(torch.nn.Module):
     """A transformer-encoder structure based on the components from above."""
 
     def __init__(self, idx, cfg_arch):
         super().__init__()
-        self.dropout = torch.nn.Dropout(cfg_arch.hidden_dropout_prob, inplace=INPLACE)
+        self.dropout = torch.nn.Dropout(cfg_arch.hidden_dropout_prob, inplace=False)
         self.norm1 = _get_norm_fn(cfg_arch.norm)(cfg_arch.hidden_size, eps=cfg_arch.norm_eps)
         self.norm2 = _get_norm_fn(cfg_arch.norm)(cfg_arch.hidden_size, eps=cfg_arch.norm_eps)
         self.attn = AttentionComponent(
@@ -51,40 +63,18 @@ class TransformerLayerSimplified(torch.nn.Module):
             cfg_arch.attention,
             cfg_arch.use_bias,
         )
-        nonlin_fn = _get_nonlin_fn(cfg_arch.nonlin)
-        if (idx + 1) % cfg_arch.ffn_layer_frequency == 0:
-            self.ffn = FFNComponent(
-                cfg_arch.hidden_size,
-                cfg_arch.intermed_size,
-                nonlin_fn,
-                cfg_arch.use_bias,
-            )
-        else:
-            self.ffn = torch.nn.Identity()
-
-        self.norm_scheme = cfg_arch.norm_scheme
-        self.fn_training, self.fn_eval = get_layer_fn(
-            self.norm_scheme, prob=cfg_arch.hidden_dropout_prob, scripting=cfg_arch.layer_fusion, dn=False, drop=False
-        )
-        self.register_buffer("alpha", torch.tensor(1.0))
         self.LAYOUT = self.attn.LAYOUT
 
-    def forward(self, states, attention_mask: Optional[torch.Tensor] = None):
-        if self.norm_scheme == "pre":  # On Layer Normalization in the Transformer Architecture
-            if self.training:
-                states = self.fn_training(states, self.attn(self.norm1(states), attention_mask), self.alpha, self.alpha)
-                states = self.fn_training(states, self.ffn(self.norm2(states)), self.alpha, self.alpha)
-            else:
-                states = self.fn_eval(states, self.attn(self.norm1(states), attention_mask), self.alpha, self.alpha)
-                states = self.fn_eval(states, self.ffn(self.norm2(states)), self.alpha, self.alpha)
-        else:
-            if self.training:
-                states = self.norm1(self.fn_training(states, self.attn(states, attention_mask), self.alpha, self.alpha))
-                states = self.norm2(self.fn_training(states, self.ffn(states), self.alpha, self.alpha))
-            else:
-                states = self.norm1(self.fn_eval(states, self.attn(states, attention_mask), self.alpha, self.alpha))
-                states = self.norm2(self.fn_eval(states, self.ffn(states), self.alpha, self.alpha))
+        self.ffn = FFNComponent(
+            cfg_arch.hidden_size,
+            cfg_arch.intermed_size,
+            _get_nonlin_fn(cfg_arch.nonlin),
+            cfg_arch.use_bias,
+        )
 
+    def forward(self, states, attention_mask: Optional[torch.Tensor] = None):
+        states = states + self.dropout(self.attn(self.norm1(states), attention_mask))
+        states = states + self.dropout(self.ffn(self.norm2(states)))
         return states
 
 
@@ -105,11 +95,11 @@ class ScriptableRecurrentLM(torch.nn.Module):
                 bias=cfg_arch.use_bias,
             )
 
-        self.recurrent_layer = SequentialwithMask([TransformerLayerSimplified(idx, cfg_arch) for idx in range(cfg_arch.recurrent_layers)])
+        self.recurrent_layer = SequentialwithMask([TransformerLayer(idx, cfg_arch) for idx in range(cfg_arch.recurrent_layers)])
 
         self.seq_first = self.recurrent_layer.LAYOUT == "[S B H]" if len(self.recurrent_layer) > 0 else False
 
-    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
+    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None, **kwargs):
         if attention_mask is not None:
             attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape, self.cfg.attention.causal_attention)
 
@@ -167,7 +157,6 @@ class BPTTforPreTraining(torch.nn.Module):
 
         for name, module in self.named_modules():
             _init_module(
-                name,
                 module,
                 self.cfg.init.type,
                 self.cfg.init.std,
@@ -182,7 +171,7 @@ class BPTTforPreTraining(torch.nn.Module):
         else:
             raise ValueError(f"Invalid training scheme {cfg_arch.training_scheme} given.")
 
-    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
+    def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None, **kwargs):
         return self._forward_method(input_ids, attention_mask, labels)
 
     def _forward_token_exit(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):

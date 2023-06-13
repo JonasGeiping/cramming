@@ -38,6 +38,7 @@ def main_load_process(cfg, setup):
         # Save to hub
         if cfg.impl.push_to_huggingface_hub:
             model_engine.push_to_hub(tokenizer, cfg, dryrun=cfg.dryrun)
+    return {}
 
 
 @hydra.main(config_path="cramming/config", config_name="cfg_pretrain", version_base="1.1")

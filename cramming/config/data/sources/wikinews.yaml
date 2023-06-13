@@ -1,0 +1,11 @@
+# A part of ROOTS
+bigscience-data/roots_en_wikinews:
+  provider: huggingface
+  partition:
+  split: train
+
+  streaming: False
+
+  # source-specific cleaning rules?
+  remove_columns:
+  concatenate_successive_entries: 0

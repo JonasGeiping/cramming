@@ -1,0 +1,11 @@
+# The open webtext replication, as mirrored on HF
+openwebtext:
+  provider: huggingface
+  partition: plain_text
+  split: train
+
+  streaming: False
+
+  # source-specific cleaning rules?
+  remove_columns:
+  concatenate_successive_entries: 0

@@ -3,7 +3,7 @@
 defaults:
   - impl: torch-default
   - wandb: none
-  - eval: mnli
+  - eval: GLUE_sane
   - _self_
   - override hydra/job_logging: custom
 
