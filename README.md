@@ -49,7 +49,7 @@ Run  `pip install .` to install all dependencies.
 
 To verify a minimal installation, you can run
 ```
-python pretrain.py name=test arch=bert-base train=bert-base data=sanity-check-2 dryrun=True impl.microbatch_size=2
+python pretrain.py name=test arch=hf-bert-base train=bert-base data=sanity-check-2 dryrun=True impl.microbatch_size=2
 ```
 This command pre-processes a small sanity-check dataset, and runs a single training step.
 
