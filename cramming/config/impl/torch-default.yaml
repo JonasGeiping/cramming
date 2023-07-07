@@ -25,11 +25,11 @@ dynamic: False # this is a world of pain (when I last tested it, around torch2.0
 fullgraph: True # why even compile when not compile everywhere :>
 backend: inductor # use eager here when using the old bert-cX models
 _inductor_vars:
-  max_autotune_gemm: True
-  max_autotune_pointwise: False # was better in some tests not to enable this?
+  # max_autotune_gemm: True
+  # max_autotune_pointwise: False # was better in some tests not to enable this?
   triton:
     cudagraphs: True
-    cudagraph_trees: False # not working with multiprocessing on May19th nightly
+    # cudagraph_trees: False # not working with multiprocessing on May19th nightly
   # epilogue_fusion: True # true by default in latest nightly
   # aggressive_fusion: False # oom on latest nightly
   permute_fusion: True # nice
