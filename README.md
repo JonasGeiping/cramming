@@ -111,6 +111,14 @@ python eval.py eval=GLUE_sane name=amp_b8192_cb_o4_final eval.checkpoint=latest 
 ```
 to evaluate the model. The recipe called "crammed BERT" in the paper corresponds to the architecture called `crammed-bert` in the config,  trained with the training setup `bert-o4` on data `the-pile`.
 
+#### Inductor Settings
+
+For optimal performance, you need to be on the latest pytorch nightly and set the following inductor variables (which modify the `torch.compile` setup using inductor):
+* `max_autotune_gemm: True`
+* `max_autotune_pointwise: False`
+* `triton.cudagraphs: True`
+* `triton.cudagraph_trees: False`
+
 ## Additional Recipes
 Pretraining:
 Single GPU, original BERT settings:
