@@ -94,6 +94,8 @@ def prepare_pretraining_dataloader(dataset, tokenizer, cfg_train, cfg_impl):
 
         if cfg_impl.shuffle_in_dataloader:
             dataset = dataset.shuffle(seed=42, buffer_size=256)
+        else:
+            num_workers = 1  # ordered data is not loaded correctly with multiple workers in this case
         if cfg_train.reverse_dataset_order:
             raise ValueError("Reverse stream not implemented.")
         sampler = None
@@ -110,10 +112,9 @@ def prepare_pretraining_dataloader(dataset, tokenizer, cfg_train, cfg_impl):
                 sampler = torch.utils.data.RandomSampler(dataset)
             else:
                 sampler = torch.utils.data.SequentialSampler(dataset)
-        worker_init_fn = None
+        if cfg_train.reverse_dataset_order:
+            dataset = dataset.select(reversed(range(len(dataset))))
 
-    if cfg_train.reverse_dataset_order:
-        dataset = dataset.select(reversed(range(len(dataset))))
     repeated_dataloader = InfiniteDataLoader(
         dataset,
         sampler=sampler,

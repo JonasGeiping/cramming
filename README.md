@@ -12,7 +12,7 @@ How far can we get with a single GPU in just one day?
 Aside from re-analyzing nearly all components of the pretraining pipeline for this scenario and providing a modified pipeline with performance close to BERT, we investigate why scaling down is hard, and which modifications actually improve performance in this scenario. We provide evidence that even in this constrained setting, performance closely follows scaling laws observed in large-compute settings. Through the lens of scaling laws, we categorize a range of recent improvements to training and architecture and discuss their merit and practical applicability (or lack thereof) for the limited compute setting.
 
 
-## UPDATE: This is the version of the framework!
+## UPDATE: This is the new version of the framework!
 
 You need PyTorch 2.0 to run the new code. If you want to remain on PyTorch 1.*, you can checkout the tag `Last1.13release`. The new model, trained with the new codebase is 1-2% better on GLUE with the same budget. The checkpoint can be found at https://huggingface.co/JonasGeiping/crammed-bert. The old checkpoint is now https://huggingface.co/JonasGeiping/crammed-bert-legacy.
 
@@ -107,7 +107,7 @@ python pretrain.py name=amp_b8192_cb_o4_final arch=crammed-bert train=bert-o4  d
 ```
 to pretrain and
 ```
-python eval.py eval=GLUE_sane name=amp_b8192_cb_o4_final eval.checkpoint=latest impl.microbatch_size=16 impl.shuffle_in_dataloader=True
+python eval.py eval=GLUE_sane name=amp_b8192_cb_o4_final eval.checkpoint=latest impl.microbatch_size=16 impl.shuffle_in_dataloader=True impl.compile_torch=False
 ```
 to evaluate the model. The recipe called "crammed BERT" in the paper corresponds to the architecture called `crammed-bert` in the config,  trained with the training setup `bert-o4` on data `the-pile`.
 
@@ -132,11 +132,11 @@ torchrun --nproc_per_node=4 --standalone pretrain.py name=bert4gpu  data=bookcor
 
 Eval a huggingface checkpoint:
 ```
-python eval.py eval=rte name=bert-finetuning eval.checkpoint=hf://bert-base-uncased
+python eval.py eval=rte name=bert-finetuning eval.checkpoint=hf://bert-base-uncased impl.shuffle_in_dataloader=True impl.compile_torch=False
 ```
-Eval a local checkpoint:
+Eval a local checkpoint (disable compilation, which expect fixed shapes right now):
 ```
-python eval.py eval=rte name=NAME_OF_PRETRAINING_RUN eval.checkpoint=latest
+python eval.py eval=rte name=NAME_OF_PRETRAINING_RUN eval.checkpoint=latest impl.shuffle_in_dataloader=True impl.compile_torch=False
 ```
 
 Sanity check for distributed code on CPU:
