@@ -130,13 +130,13 @@ Multi-GPU, original BERT settings:
 torchrun --nproc_per_node=4 --standalone pretrain.py name=bert4gpu  data=bookcorpus-wikipedia arch=bert-original train=bert-original budget=10000000 impl.fullgraph=false impl._inductor_vars.triton.cudagraphs=False
 ```
 
-Eval a huggingface checkpoint:
+Eval a huggingface checkpoint (in this example on RTE):
 ```
-python eval.py eval=rte name=bert-finetuning eval.checkpoint=hf://bert-base-uncased impl.shuffle_in_dataloader=True impl.compile_torch=False
+python eval.py eval=GLUE_sane eval/task=rte name=bert-finetuning eval.checkpoint=hf://bert-base-uncased impl.shuffle_in_dataloader=True impl.compile_torch=False
 ```
 Eval a local checkpoint (disable compilation, which expect fixed shapes right now):
 ```
-python eval.py eval=rte name=NAME_OF_PRETRAINING_RUN eval.checkpoint=latest impl.shuffle_in_dataloader=True impl.compile_torch=False
+python eval.py eval=GLUE_sane eval/task=rte name=NAME_OF_PRETRAINING_RUN eval.checkpoint=latest impl.shuffle_in_dataloader=True impl.compile_torch=False
 ```
 
 Sanity check for distributed code on CPU:
