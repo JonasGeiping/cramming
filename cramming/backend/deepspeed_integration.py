@@ -10,7 +10,7 @@ from functools import partial
 
 import logging
 from omegaconf import OmegaConf
-from .utils import group_parameters, prepare_pretraining_dataloader, torchdynamo_compile_method
+from .utils import group_parameters, prepare_pretraining_dataloader
 from .optimizers import get_schedule_fn
 
 log = logging.getLogger(__name__)
@@ -65,8 +65,6 @@ def initialize_deepspeed(model, dataset, tokenizer, cfg_train, cfg_impl, setup=_
         self.backward(loss)
         self.optimizer_step()
         return loss.detach()
-
-    model_engine.step = lambda batch: torchdynamo_compile_method(step, cfg_impl.optimizer_context)(self=model_engine, batch=batch)
 
     if dataset is not None:
         dataloader = prepare_pretraining_dataloader(dataset, tokenizer, cfg_train, cfg_impl)

@@ -129,6 +129,7 @@ class ScriptableLM(PreTrainedModel):
         self.embedding = EmbeddingComponent(self.cfg.embedding, self.cfg.norm, self.cfg.norm_eps)
         self.layers = torch.nn.ModuleList([TransformerLayer(idx, self.cfg) for idx in range(self.cfg.num_transformer_layers)])
         self.seq_first = self.layers[0].LAYOUT == "[S B H]" if len(self.layers) > 0 else False
+        self.use_causal_attention = self.cfg.attention.causal_attention
 
         if self.cfg.final_norm:
             self.final_norm = _get_norm_fn(self.cfg.norm)(self.cfg.hidden_size, eps=self.cfg.norm_eps)
@@ -137,7 +138,7 @@ class ScriptableLM(PreTrainedModel):
 
     def forward(self, input_ids, attention_mask: Optional[torch.Tensor] = None, labels: Optional[torch.Tensor] = None):
         if attention_mask is not None:
-            attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape, self.cfg.attention.causal_attention)
+            attention_mask = get_extended_attention_mask(attention_mask, input_ids.shape, self.use_causal_attention)
         hidden_states = self.embedding(input_ids)
 
         if self.seq_first:
@@ -236,10 +237,11 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.cfg = OmegaConf.create(config.arch)
+        self.num_labels = self.cfg.num_labels
 
         self.encoder = ScriptableLM(config)
         self.pooler = PoolingComponent(self.cfg.classification_head, self.cfg.hidden_size)
-        self.head = torch.nn.Linear(self.cfg.classification_head.head_dim, self.cfg.num_labels)
+        self.head = torch.nn.Linear(self.cfg.classification_head.head_dim, self.num_labels)
 
         self.problem_type = None
         self._init_weights()
@@ -260,22 +262,22 @@ class ScriptableLMForSequenceClassification(PreTrainedModel):
 
         if labels is not None:
             if self.problem_type is None:  # very much from huggingface
-                if self.cfg.num_labels == 1:
+                if self.num_labels == 1:
                     self.problem_type = "regression"
-                elif self.cfg.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
                     self.problem_type = "single_label_classification"
                 else:
                     self.problem_type = "multi_label_classification"
 
             if self.problem_type == "regression":
                 loss_fct = torch.nn.MSELoss()
-                if self.cfg.num_labels == 1:
+                if self.num_labels == 1:
                     loss = loss_fct(logits.squeeze(), labels.squeeze())
                 else:
                     loss = loss_fct(logits, labels)
             elif self.problem_type == "single_label_classification":
                 loss_fct = torch.nn.CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.cfg.num_labels), labels.view(-1))
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
             elif self.problem_type == "multi_label_classification":
                 loss_fct = torch.nn.BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)
@@ -294,6 +296,7 @@ class ScriptableLMForSCRIPTTraining(PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.cfg = OmegaConf.create(config.arch)
+        self.num_labels = self.cfg.num_labels
 
         self.encoder = ScriptableLM(config)
         self.prediction_head = PredictionHeadComponent(self.cfg)
@@ -390,7 +393,7 @@ class ScriptableLMForTokenClassification(PreTrainedModel):
         self.cfg = OmegaConf.create(config.arch)
 
         self.encoder = ScriptableLM(config)
-        self.head = torch.nn.Linear(self.cfg.classification_head.head_dim, self.cfg.num_labels)
+        self.head = torch.nn.Linear(self.cfg.classification_head.head_dim, self.num_labels)
 
         self.problem_type = None
         self._init_weights()
@@ -411,22 +414,22 @@ class ScriptableLMForTokenClassification(PreTrainedModel):
 
         if labels is not None:
             if self.problem_type is None:  # very much from huggingface
-                if self.cfg.num_labels == 1:
+                if self.num_labels == 1:
                     self.problem_type = "regression"
-                elif self.cfg.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
                     self.problem_type = "single_label_classification"
                 else:
                     self.problem_type = "multi_label_classification"
 
             if self.problem_type == "regression":
                 loss_fct = torch.nn.MSELoss()
-                if self.cfg.num_labels == 1:
+                if self.num_labels == 1:
                     loss = loss_fct(logits.squeeze(), labels.squeeze())
                 else:
                     loss = loss_fct(logits, labels)
             elif self.problem_type == "single_label_classification":
                 loss_fct = torch.nn.CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.cfg.num_labels), labels.view(-1))
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
             elif self.problem_type == "multi_label_classification":
                 loss_fct = torch.nn.BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)
