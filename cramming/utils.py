@@ -45,7 +45,7 @@ def main_launcher(cfg, main_fn, job_name=""):
 
     # Decide GPU and possibly connect to distributed setup
     setup, kWh_counter = system_startup(cfg)
-    # Initialize wanDB
+    # Initialize wandb
     if cfg.wandb.enabled:
         _initialize_wandb(setup, cfg)
     log.info("--------------------------------------------------------------")
@@ -119,32 +119,31 @@ def system_startup(cfg):
     allowed_cpus_available = min(psutil.cpu_count(logical=False), len(psutil.Process().cpu_affinity()))  # covering both affinity and phys.
     # Distributed launch?
     if "LOCAL_RANK" in os.environ:
-        threads_per_gpu = max(1, min(allowed_cpus_available // max(1, torch.cuda.device_count()), cfg.impl.threads))
-        torch.set_num_threads(threads_per_gpu)
-        os.environ["OMP_NUM_THREADS"] = str(threads_per_gpu)
-        local_rank = int(os.environ["LOCAL_RANK"])
-        cfg.impl.local_rank = local_rank
         torch.distributed.init_process_group(backend=cfg.impl.dist_backend)
+        local_rank = int(os.environ["LOCAL_RANK"])
         global_rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
         run = os.environ.get("TORCHELASTIC_RUN_ID", "unknown")
+        threads_per_gpu = max(1, min(allowed_cpus_available // max(1, torch.cuda.device_count()), cfg.impl.threads))
         log.info(
             f"Distributed worker initialized on rank {global_rank} (local rank {local_rank}) "
             f"with {world_size} total processes. OMP Threads set to {threads_per_gpu}. Run ID is {run}."
         )
         log.setLevel(logging.INFO if is_main_process() else logging.ERROR)
     else:
-        threads_per_gpu = min(allowed_cpus_available, cfg.impl.threads)
-        torch.set_num_threads(threads_per_gpu)
-        os.environ["OMP_NUM_THREADS"] = str(threads_per_gpu)
+        threads_per_gpu = max(1, min(allowed_cpus_available, cfg.impl.threads))
         global_rank = local_rank = 0
-        cfg.impl.local_rank = local_rank
+
+    torch.set_num_threads(threads_per_gpu)
+    os.environ["OMP_NUM_THREADS"] = str(threads_per_gpu)
+    cfg.impl.local_rank = local_rank
 
     # datasets will automatically disable tokenizer parallelism when needed:
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     os.environ["RAYON_RS_NUM_CPUS"] = str(threads_per_gpu)
     max_dataset_memory = f"{psutil.virtual_memory().total // 2 // max(torch.cuda.device_count(), 1)}"
     os.environ["HF_DATASETS_IN_MEMORY_MAX_SIZE"] = max_dataset_memory
+    os.environ["SAFETENSORS_FAST_GPU"] = "1"
 
     # Construct setup dictionary:
     dtype = getattr(torch, cfg.impl.default_precision)  # :> dont mess this up
@@ -440,6 +439,7 @@ def dump_metrics(cfg, metrics):
 
 
 def _initialize_wandb(setup, cfg):
+    os.environ["WANDB__SERVICE_WAIT"] = "300"
     if is_main_process():
         import wandb
 

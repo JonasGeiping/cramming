@@ -361,7 +361,7 @@ def raw_dataset_preprocessing(raw_dataset, num_threads, cfg_data):
     map_setup = dict(
         batched=True,
         batch_size=1024,
-        num_proc=None,  # a bit messy but c4 in RAM can be overbearing otherwise
+        num_proc=min(num_threads, 8) if num_threads > 0 else None,  # a bit messy but c4 in RAM can be overbearing otherwise
         # load_from_cache_file=False,
         # keep_in_memory=False,
     )

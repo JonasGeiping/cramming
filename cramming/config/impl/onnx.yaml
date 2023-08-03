@@ -1,6 +1,4 @@
 defaults:
   - _default
   - _self_
-
-
 # This was never implemented, but in principle the interface could be extended to handle the ONNX training API.

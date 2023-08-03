@@ -1,8 +1,8 @@
 # Pile streaming from huggingface with new streaming tech :>
 # should be 1.2T in this deduplicated version
-EleutherAI/the_pile:
+EleutherAI/pile:
   provider: huggingface
-  partition: unshuffled_deduplicated_en
+  subsets: all
   split: train
 
   streaming: True

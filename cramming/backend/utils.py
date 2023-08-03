@@ -60,18 +60,6 @@ def updated_latest_weight_average(model_parameters, model_buffers, store, last_k
     return param_store, buffer_store
 
 
-def torchdynamo_compile_method(method_call, optimizer_arg=None):
-    if optimizer_arg is None:
-        return method_call
-    else:
-        from torch import _dynamo
-
-        print("Attempting to compile given method with torchdynamo")
-        _dynamo.config.verbose = True
-        opt_decorator = _dynamo.optimize(backend=optimizer_arg, nopython=False, guard_export_fn=None, disable=False)
-        return opt_decorator(method_call)
-
-
 def prepare_pretraining_dataloader(dataset, tokenizer, cfg_train, cfg_impl):
 
     num_workers = get_num_workers(cfg_impl)
