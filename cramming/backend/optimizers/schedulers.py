@@ -7,7 +7,7 @@ import time
 from functools import partial
 
 
-def get_schedule_fn(cfg_train):
+def get_schedule_fn(initial_time, cfg_train):
     """Returns a callable scheduler_fn(optimizer).
 
     Todo: Sanitize and unify these schedulers...
@@ -62,6 +62,7 @@ def get_schedule_fn(cfg_train):
             num_warmup_steps=cfg_train.warmup_steps,
             num_cooldown_steps=cfg_train.cooldown_steps,
             num_training_steps=cfg_train.steps,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-constant":
         scheduler_fn = partial(
@@ -70,6 +71,7 @@ def get_schedule_fn(cfg_train):
             num_warmup_steps=cfg_train.warmup_steps,
             num_cooldown_steps=cfg_train.cooldown_steps,
             num_training_steps=cfg_train.steps,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-cosine-decay":
         scheduler_fn = partial(
@@ -78,6 +80,7 @@ def get_schedule_fn(cfg_train):
             num_warmup_steps=cfg_train.warmup_steps,
             num_training_steps=cfg_train.steps,
             num_cycles=0.5,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-cosine-annealing":
         scheduler_fn = partial(
@@ -86,6 +89,7 @@ def get_schedule_fn(cfg_train):
             num_warmup_steps=cfg_train.warmup_steps,
             num_training_steps=cfg_train.steps,
             num_cycles=4,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-linear":
         scheduler_fn = partial(
@@ -93,6 +97,7 @@ def get_schedule_fn(cfg_train):
             hour_budget=cfg_train.budget,
             num_warmup_steps=cfg_train.warmup_steps,
             num_training_steps=cfg_train.steps,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-polynomial":
         scheduler_fn = partial(
@@ -100,18 +105,21 @@ def get_schedule_fn(cfg_train):
             hour_budget=cfg_train.budget,
             num_warmup_steps=cfg_train.warmup_steps,
             num_training_steps=cfg_train.steps,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-one-cycle":  # this is a simplified one-cycle
         scheduler_fn = partial(
             get_budget_one_cycle,
             hour_budget=cfg_train.budget,
             num_training_steps=cfg_train.steps,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-multi-cycle":
         scheduler_fn = partial(
             get_budget_multi_cycle,
             hour_budget=cfg_train.budget,
             num_training_steps=cfg_train.steps,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-ramp":
         scheduler_fn = partial(
@@ -119,6 +127,7 @@ def get_schedule_fn(cfg_train):
             hour_budget=cfg_train.budget,
             num_cooldown_steps=cfg_train.cooldown_steps,
             num_training_steps=cfg_train.steps,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-inv-cosine":
         scheduler_fn = partial(
@@ -126,6 +135,7 @@ def get_schedule_fn(cfg_train):
             hour_budget=cfg_train.budget,
             num_cooldown_steps=cfg_train.cooldown_steps,
             num_training_steps=cfg_train.steps,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-dive":
         scheduler_fn = partial(
@@ -134,6 +144,7 @@ def get_schedule_fn(cfg_train):
             num_training_steps=cfg_train.steps,
             num_warmup_steps=cfg_train.warmup_steps,
             falloff=0.5,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-dive-slow":
         scheduler_fn = partial(
@@ -142,6 +153,7 @@ def get_schedule_fn(cfg_train):
             num_training_steps=cfg_train.steps,
             num_warmup_steps=cfg_train.warmup_steps,
             falloff=0.75,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-dive-fast":
         scheduler_fn = partial(
@@ -150,6 +162,7 @@ def get_schedule_fn(cfg_train):
             num_training_steps=cfg_train.steps,
             num_warmup_steps=cfg_train.warmup_steps,
             falloff=0.25,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-triangle1":
         scheduler_fn = partial(
@@ -158,6 +171,7 @@ def get_schedule_fn(cfg_train):
             num_training_steps=cfg_train.steps,
             falloff=0.25,
             base_percentage=0.5,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler == "budget-triangle2":
         scheduler_fn = partial(
@@ -166,6 +180,7 @@ def get_schedule_fn(cfg_train):
             num_training_steps=cfg_train.steps,
             falloff=0.25,
             base_percentage=0.25,
+            initial_time=initial_time,
         )
     elif cfg_train.scheduler in [
         "linear",
@@ -293,7 +308,7 @@ def _get_fake_step(current_step, initial_time, hour_budget, num_training_steps):
     return fake_step
 
 
-def get_budget_inv_sqrt_scheduler(optimizer, hour_budget, num_warmup_steps, num_cooldown_steps, num_training_steps):
+def get_budget_inv_sqrt_scheduler(optimizer, hour_budget, num_warmup_steps, num_cooldown_steps, num_training_steps, initial_time=None):
     """Time-based scheduler as described in Iszak et al. plus inv_sqrt.
     Takes in num_warmup_steps and num_training_steps as normal, but actually squeezes the planned schedule into the
     budget given by hour_budget, based on wallclock measurements.
@@ -302,7 +317,6 @@ def get_budget_inv_sqrt_scheduler(optimizer, hour_budget, num_warmup_steps, num_
     """
     decay_factor = num_warmup_steps**0.5
     decayed_lr = decay_factor * (num_training_steps - num_cooldown_steps) ** -0.5
-    initial_time = time.time()
 
     def lr_lambda(current_step: int):
         fake_step = _get_fake_step(current_step, initial_time, hour_budget, num_training_steps)
@@ -316,9 +330,8 @@ def get_budget_inv_sqrt_scheduler(optimizer, hour_budget, num_warmup_steps, num_
     return LambdaLR(optimizer, lr_lambda, last_epoch=-1)
 
 
-def get_budget_constant_scheduler(optimizer, hour_budget, num_warmup_steps, num_cooldown_steps, num_training_steps):
+def get_budget_constant_scheduler(optimizer, hour_budget, num_warmup_steps, num_cooldown_steps, num_training_steps, initial_time):
     """Time-based scheduler with optional warmup and cooldown (so technically a trapezoidal shape)"""
-    initial_time = time.time()
 
     def lr_lambda(current_step: int):
         fake_step = _get_fake_step(current_step, initial_time, hour_budget, num_training_steps)
@@ -332,9 +345,8 @@ def get_budget_constant_scheduler(optimizer, hour_budget, num_warmup_steps, num_
     return LambdaLR(optimizer, lr_lambda, last_epoch=-1)
 
 
-def get_budget_linear_schedule_with_warmup(optimizer, hour_budget, num_warmup_steps, num_training_steps, num_cycles=0.5):
+def get_budget_linear_schedule_with_warmup(optimizer, hour_budget, num_warmup_steps, num_training_steps, initial_time, num_cycles=0.5):
     """Follows the huggingface transformers scheduler with the same name, but gets an additional arg hour_budget"""
-    initial_time = time.time()
 
     def lr_lambda(current_step):
         fake_step = _get_fake_step(current_step, initial_time, hour_budget, num_training_steps)
@@ -345,9 +357,8 @@ def get_budget_linear_schedule_with_warmup(optimizer, hour_budget, num_warmup_st
     return LambdaLR(optimizer, lr_lambda, -1)
 
 
-def get_budget_cosine_schedule_with_warmup(optimizer, hour_budget, num_warmup_steps, num_training_steps, num_cycles=0.5):
+def get_budget_cosine_schedule_with_warmup(optimizer, hour_budget, num_warmup_steps, num_training_steps, initial_time, num_cycles=0.5):
     """Follows the huggingface transformers scheduler with the same name, but gets an additional arg hour_budget"""
-    initial_time = time.time()
 
     def lr_lambda(current_step):
         fake_step = _get_fake_step(current_step, initial_time, hour_budget, num_training_steps)
@@ -359,9 +370,8 @@ def get_budget_cosine_schedule_with_warmup(optimizer, hour_budget, num_warmup_st
     return LambdaLR(optimizer, lr_lambda, -1)
 
 
-def get_budget_cosine_half_cycles_with_warmup(optimizer, hour_budget, num_warmup_steps, num_training_steps, num_cycles=0.5):
+def get_budget_cosine_half_cycles_with_warmup(optimizer, hour_budget, num_warmup_steps, num_training_steps, initial_time, num_cycles=0.5):
     """Follows the huggingface transformers scheduler with the same name, but gets an additional arg hour_budget"""
-    initial_time = time.time()
 
     def lr_lambda(current_step):
         fake_step = _get_fake_step(current_step, initial_time, hour_budget, num_training_steps)
@@ -373,9 +383,8 @@ def get_budget_cosine_half_cycles_with_warmup(optimizer, hour_budget, num_warmup
     return LambdaLR(optimizer, lr_lambda, -1)
 
 
-def get_budget_one_cycle(optimizer, hour_budget, num_training_steps):
+def get_budget_one_cycle(optimizer, hour_budget, num_training_steps, initial_time):
     """Simple single-cycle scheduler. Not including paper/fastai three-phase things or asymmetry."""
-    initial_time = time.time()
 
     def lr_lambda(current_step):
         fake_step = _get_fake_step(current_step, initial_time, hour_budget, num_training_steps)
@@ -387,9 +396,8 @@ def get_budget_one_cycle(optimizer, hour_budget, num_training_steps):
     return LambdaLR(optimizer, lr_lambda, -1)
 
 
-def get_budget_multi_cycle(optimizer, hour_budget, num_training_steps, num_cycles=8):
+def get_budget_multi_cycle(optimizer, hour_budget, num_training_steps, initial_time, num_cycles=8):
     """Simple multi-cycle scheduler. Not including paper/fastai three-phase things or asymmetry."""
-    initial_time = time.time()
     cycle_length = int(num_training_steps / num_cycles)
 
     def lr_lambda(current_step):
@@ -402,9 +410,8 @@ def get_budget_multi_cycle(optimizer, hour_budget, num_training_steps, num_cycle
     return LambdaLR(optimizer, lr_lambda, -1)
 
 
-def get_budget_ramp(optimizer, hour_budget, num_cooldown_steps, num_training_steps):
+def get_budget_ramp(optimizer, hour_budget, num_cooldown_steps, num_training_steps, initial_time):
     """to the moon."""
-    initial_time = time.time()
     max_lr = (num_training_steps - num_cooldown_steps) / num_training_steps
 
     def lr_lambda(current_step):
@@ -417,9 +424,8 @@ def get_budget_ramp(optimizer, hour_budget, num_cooldown_steps, num_training_ste
     return LambdaLR(optimizer, lr_lambda, -1)
 
 
-def get_budget_inv_cosine_schedule(optimizer, hour_budget, num_cooldown_steps, num_training_steps, num_cycles=0.5):
+def get_budget_inv_cosine_schedule(optimizer, hour_budget, num_cooldown_steps, num_training_steps, initial_time, num_cycles=0.5):
     """An inverse cosine schedule, with limited budget."""
-    initial_time = time.time()
     ult_step = num_training_steps - num_cooldown_steps
     max_lr = max(0.0, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * (1 - ult_step / float(max(1, num_training_steps))))))
 
@@ -435,12 +441,11 @@ def get_budget_inv_cosine_schedule(optimizer, hour_budget, num_cooldown_steps, n
     return LambdaLR(optimizer, lr_lambda, -1)
 
 
-def get_budget_triangle(optimizer, hour_budget, num_training_steps, base_percentage=0.5, falloff=0.5):
+def get_budget_triangle(optimizer, hour_budget, num_training_steps, initial_time, base_percentage=0.5, falloff=0.5):
     """Linear increase from a percentage of the base learning rate, then linear decay.
 
     plot min(0.5 + x * (1 - 0.5)/(1-0.25) / 1000, 1/0.25 - x / (1000 * 0.25)) from 0 to 1000 in the plot range 0 to 1
     """
-    initial_time = time.time()
 
     def lr_lambda(current_step):
         fake_step = _get_fake_step(current_step, initial_time, hour_budget, num_training_steps)
@@ -456,7 +461,6 @@ def get_budget_dive(optimizer, hour_budget, num_training_steps, num_warmup_steps
     """Constant, then linear decay.
     plot min(1, 1/0.5 - x / (1000 * 0.5)) from 0 to 1000 in the plot range 0 to 1
     """
-    initial_time = time.time()
 
     def lr_lambda(current_step):
         fake_step = _get_fake_step(current_step, initial_time, hour_budget, num_training_steps)
@@ -468,10 +472,11 @@ def get_budget_dive(optimizer, hour_budget, num_training_steps, num_warmup_steps
     return LambdaLR(optimizer, lr_lambda, -1)
 
 
-def get_budget_polynomial_decay_with_warmup(optimizer, hour_budget, num_warmup_steps, num_training_steps, lr_end=0.0, power=1.0):
+def get_budget_polynomial_decay_with_warmup(optimizer, hour_budget, num_warmup_steps, num_training_steps, initial_time):
     """Follows the huggingface transformers scheduler with the same name, but gets an additional arg hour_budget"""
-    initial_time = time.time()
     lr_init = optimizer.defaults["lr"]
+    lr_end = 0.0
+    power = 1.0
 
     def lr_lambda(current_step: int):
         fake_step = _get_fake_step(current_step, initial_time, hour_budget, num_training_steps)

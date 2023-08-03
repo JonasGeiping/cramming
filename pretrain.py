@@ -19,26 +19,34 @@ def main_training_process(cfg, setup):
     local_time = time.time()
     model = cramming.construct_model(cfg.arch, cfg.data.vocab_size)
     dataset, tokenizer = cramming.load_pretraining_corpus(cfg.data, cfg.impl)
+    checkpoint_rendevous = os.path.join(cfg.base_dir, cfg.name, "intermediate_state.pth")
+    if cfg.impl.resume_run_after_preempt and os.path.isfile(checkpoint_rendevous):
+        try:
+            metadata = torch.load(checkpoint_rendevous, map_location=torch.device("cpu"))["metadata"]
+            initial_step, elapsed_time = metadata["step"], metadata["elapsed"]
+        except RuntimeError:
+            log.info("Checkpoint file unreadable or corrupted.")
+            os.remove(checkpoint_rendevous)
+            initial_step, elapsed_time = 0, 0.0
+    else:
+        initial_step, elapsed_time = 0, 0.0
 
-    model_engine, _, _, dataloader = cramming.load_backend(
-        model,
-        dataset,
-        tokenizer,
-        cfg.train,
-        cfg.impl,
-        setup=setup,
-    )
+    model_engine, _, _, dataloader = cramming.load_backend(model, dataset, tokenizer, cfg.train, cfg.impl, elapsed_time, setup=setup)
+    if cfg.impl.resume_run_after_preempt and os.path.isfile(checkpoint_rendevous):
+        log.info(f"Loading intermediate checkpoint from previous run onto device {cfg.impl.local_rank}...")
+        model_engine.load_training_checkpoint(checkpoint_rendevous)
     model_engine.train(cfg.train.pretrain_in_train_mode)
     stats = defaultdict(list)
 
     # Start the clocks now:
-    wallclock_timer = time.time()
-    train_time = time.time()  # Crude time measurement for print_loss_every_nth_step
-    training_allowed = True
+    wallclock_timer = time.time() - elapsed_time
+    train_time = time.time()
+    training_allowed, no_recovery_necessary = True, True
     loss_vals = []
 
     # Launch training
-    for step, batch in enumerate(dataloader):
+    for step, batch in enumerate(dataloader, initial_step + 1):
+
         # Heavy lifting is moved to engines
         device_batch = model_engine.to_device(batch)
         loss = model_engine.step(device_batch)
@@ -58,28 +66,35 @@ def main_training_process(cfg, setup):
 
         # Checkpointing is triggered from stopping criteria and normal intervals
         if cfg.impl.save_intermediate_checkpoints and step % cfg.impl.save_every_nth_step == 0:
-            state = dict(step=step, tokenizer_name=tokenizer.name)
-            checkpoint_id = loss.item()
-            if cramming.utils.is_main_process():
-                model_engine.save_training_checkpoint(checkpoint_id, state=state)
+            if loss.detach().isfinite() and cramming.utils.is_main_process() and not cfg.dryrun:
+                model_engine.save_training_checkpoint(checkpoint_rendevous, metadata=dict(step=step, elapsed=time.time() - wallclock_timer))
 
         if not loss.detach().isfinite():
-            training_allowed = False
-            log.info("Ending training due to non-finite loss.")
+            training_allowed, no_recovery_necessary = engage_troubleshooting(
+                model_engine, step, training_allowed, no_recovery_necessary, cfg
+            )
 
-        flag_communication(training_allowed)
+        communicate_flags(training_allowed, no_recovery_necessary)
 
         if (cfg.dryrun and step > 2) or not training_allowed:
             break
 
+        if not no_recovery_necessary:  # synced across devices
+            log.info(f"Attempting reload of checkpoint on device {cfg.impl.local_rank}.")
+            model_engine.load_training_checkpoint(checkpoint_rendevous)
+            no_recovery_necessary = True
+
     # Save to summary:
     cramming.utils.save_summary("pretrain", cfg, stats, time.time() - local_time, setup)
     if cramming.utils.is_main_process():
-        # Save final checkpoint?
+        # Save final checkpoint? Might have to recover the latest checkpoint first
+        if not loss.detach().isfinite() and cfg.impl.save_intermediate_checkpoints:
+            model_engine.load_training_checkpoint(checkpoint_rendevous)
+            loss = torch.as_tensor(16.0)  # fake value for model file name
         if loss.detach().isfinite():
             now = datetime.datetime.now()
-            checkpoint_id = f"{''.join(cfg.arch.architectures)}_{now.strftime('%Y-%m-%d')}_{loss:2.4f}"
-            model_engine.save_final_model(os.path.join(cfg.base_dir, cfg.name), checkpoint_id, tokenizer, cfg.arch, cfg.dryrun)
+            long_checkpoint_id = f"{''.join(cfg.arch.architectures)}_{now.strftime('%Y-%m-%d')}_{loss:2.4f}"
+            model_engine.save_final_model(os.path.join(cfg.base_dir, cfg.name), long_checkpoint_id, tokenizer, cfg.arch, cfg.dryrun)
 
             if cfg.impl.push_to_huggingface_hub:
                 model_engine.push_to_hub(tokenizer, cfg, dryrun=cfg.dryrun)
@@ -136,18 +151,45 @@ def collect_stats(step, loss_vals, train_time, stats, model_engine, dataloader, 
     return loss_vals, train_time
 
 
-def flag_communication(training_allowed):
+def engage_troubleshooting(model_engine, step, training_allowed, cfg):
+    training_allowed, no_recovery_necessary = training_allowed, no_recovery_necessary
+    # log.info(f"Non-finite loss in step {step} on device {cfg.impl.local_rank}.")
+    #
+    # is_finite_grad = [torch.isfinite(p.grad).all() for p in model_engine.model.parameters() if p.grad is not None]
+    # has_finite_gradients = torch.stack(is_finite_grad).all() if len(is_finite_grad) > 0 else True
+    # if not has_finite_gradients:
+    #     if "dump_nan_grads" in cfg.impl.troubleshoot_strategy:
+    #         log.info(f"Non-finite gradients in step {step} on device {cfg.impl.local_rank}, dumping...")
+    #         model_engine.optimizer.zero_grad()
+    #     else:
+    #         if "recover_checkpoint" in cfg.impl.troubleshoot_strategy:
+    #             no_recovery_necessary = False
+    #         else:
+    #             training_allowed = False
+    #             log.info(f"Stopping training due to non-finite grads in step {step} on device {cfg.impl.local_rank}.")
+    #
+    # has_finite_parameters = torch.stack([torch.isfinite(p).all() for p in model_engine.model.parameters()]).all()
+    # if not has_finite_parameters:
+    #     if "recover_checkpoint" in cfg.impl.troubleshoot_strategy:
+    #         no_recovery_necessary = False
+    #     else:
+    #         training_allowed = False
+    #         log.info(f"Stopping training due to non-finite parameters in step {step} on device {cfg.impl.local_rank}.")
+    return training_allowed, no_recovery_necessary
+
+
+def communicate_flags(training_allowed, no_recovery_necessary):
     """A quick and dirty communication through the comm protocol. Should not be a major burden."""
     if torch.distributed.is_initialized():
-        comm_tensor = torch.as_tensor(training_allowed)
-        comm_tensor = comm_tensor.cuda() if torch.cuda.is_available() else comm_tensor.float()
-        torch.distributed.all_reduce(comm_tensor, torch.distributed.ReduceOp.MIN, async_op=False)
-        if comm_tensor >= 1:
-            return True
+        comm_tensor_allowed = torch.as_tensor([training_allowed, no_recovery_necessary])
+        comm_tensor_allowed = comm_tensor_allowed.cuda() if torch.cuda.is_available() else comm_tensor_allowed.float()
+        torch.distributed.all_reduce(comm_tensor_allowed, torch.distributed.ReduceOp.MIN, async_op=False)
+        if comm_tensor_allowed[0] >= 1:  # training indeed allowed on all devices
+            return True, comm_tensor_allowed[1] > 0
         else:
-            return False
+            return False, True
     else:
-        return training_allowed
+        return training_allowed, no_recovery_necessary
 
 
 @hydra.main(config_path="cramming/config", config_name="cfg_pretrain", version_base="1.1")

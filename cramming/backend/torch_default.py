@@ -20,7 +20,7 @@ import time
 import logging
 
 import transformers
-from safetensors.torch import load_file, save_file, _remove_duplicate_names
+from safetensors.torch import load_file, save_file
 from transformers.utils.generic import working_or_temp_dir
 
 from torch.distributed.optim import ZeroRedundancyOptimizer
@@ -37,7 +37,7 @@ import warnings
 warnings.filterwarnings("ignore", "Detected call of ", UserWarning)  # schedulers are deliberately used differently
 
 
-def initialize_torch(model, dataset, tokenizer, cfg_train, cfg_impl, setup=_default_setup):
+def initialize_torch(model, dataset, tokenizer, cfg_train, cfg_impl, elapsed_time, setup=_default_setup):
     """initialize a torch engine."""
     if dataset is not None:
         dataloader = prepare_pretraining_dataloader(dataset, tokenizer, cfg_train, cfg_impl)
@@ -48,9 +48,9 @@ def initialize_torch(model, dataset, tokenizer, cfg_train, cfg_impl, setup=_defa
     require_full_engine = "sequence_curriculum" in cfg_train or "weight_averaging" in cfg_train or "gradinit" in cfg_train
 
     if require_full_engine:
-        model_engine = TorchEngineFull(model, cfg_train, cfg_impl, setup=setup, seq_length=tokenizer.model_max_length)
+        model_engine = TorchEngineFull(model, cfg_train, cfg_impl, elapsed_time, setup=setup, seq_length=tokenizer.model_max_length)
     else:
-        model_engine = TorchEngineMinimal(model, cfg_train, cfg_impl, setup=setup, seq_length=tokenizer.model_max_length)
+        model_engine = TorchEngineMinimal(model, cfg_train, cfg_impl, elapsed_time, setup=setup, seq_length=tokenizer.model_max_length)
     model_engine.train()  # This is the default engine state. Pretraining scripts may change this.
     return model_engine, model_engine.optimizer, model_engine.scheduler, dataloader
 
@@ -61,7 +61,7 @@ class TorchEngineMinimal(torch.nn.Module):
     See TorchEngineFull for more modifications.
     """
 
-    def __init__(self, model, cfg_train, cfg_impl, setup=_default_setup, seq_length=128):
+    def __init__(self, model, cfg_train, cfg_impl, already_elapsed_time=0.0, setup=_default_setup, seq_length=128):
         """Load Engine. The model will be compiled by default."""
         super().__init__()
 
@@ -114,8 +114,8 @@ class TorchEngineMinimal(torch.nn.Module):
         self.accumulated_samples = 0  # Record the number of samples seen, reset after triggering gradient update
         self.steps = 0  # Record the number of times "step" has been triggered
 
-        self.optimizer, self.scheduler = _load_optimizer(model, cfg_train, cfg_impl)
-        self.initial_time = time.time()
+        self.initial_time = time.time() - already_elapsed_time
+        self.optimizer, self.scheduler = _load_optimizer(model, cfg_train, cfg_impl, self.initial_time)
 
     def step(self, batch: dict[str, torch.Tensor]):
         self.accumulated_samples += self.effective_mbs
@@ -124,7 +124,7 @@ class TorchEngineMinimal(torch.nn.Module):
             loss = self.forward(**batch)["loss"]
             self.backward(loss)
             self.optimizer_step()
-            return loss.detach()
+        return loss.detach()
 
     def to_device(self, batch: dict[str, torch.Tensor], keys: list[str] = ["input_ids", "labels"]):
         """Move batch of data into device memory."""
@@ -223,17 +223,6 @@ class TorchEngineMinimal(torch.nn.Module):
                 state_dict = self.model.module.state_dict()
             else:
                 state_dict = self.model.state_dict()
-        to_removes = _remove_duplicate_names(state_dict)
-        # metadata = None
-        # for kept_name, to_remove_group in to_removes.items():
-        #     for to_remove in to_remove_group:
-        #         if metadata is None:
-        #             metadata = {}
-        #
-        #         if to_remove not in metadata:
-        #             # Do not override user data
-        #             metadata[to_remove] = kept_name
-        #         del state_dict[to_remove]
         state_dict = {k: v.clone().contiguous() for k, v in state_dict.items()}
         return state_dict
 
@@ -247,43 +236,56 @@ class TorchEngineMinimal(torch.nn.Module):
                 # reinit optimizer:
                 self.optimizer, self.scheduler = _load_optimizer(self.model, self.cfg_train, self.cfg_impl)
         else:
-            if not skip_optim_state:
-                optim_state, model_state, scheduler_state, _ = load_file(file, device=self.setup["device"].type)
-                self.model.load_state_dict(model_state).to(**self.setup)
-                self.optimizer.load_state_dict(optim_state)
-                self.scheduler.load_state_dict(scheduler_state)
-            else:
-                model_state = load_file(file, device=self.setup["device"].type)
-                if "encoder.embedding.word_embedding.weight" not in model_state:
-                    # Hack to save space when saving the model, more clever though would be save the right one in the first place
-                    model_state["encoder.embedding.word_embedding.weight"] = model_state["decoder.weight"]
-                try:
-                    sanitized_state = {}
-                    for k, v in model_state.items():
-                        if k.startswith("module."):
-                            k = k[7:]
-                        sanitized_state[k] = v
-                    self.model.load_state_dict(sanitized_state, strict=True)
-                except RuntimeError as e:
-                    log.info(f"State dict difference is {str(e).split('Error(s) in loading state_dict for')[1]}... Ok?")
-                    self.model.load_state_dict(sanitized_state, strict=False)
-                self.model.to(**self.setup)
+            model_state = load_file(file, device=str(self.setup["device"]))
+            # This loader includes a few legacy options:
+            if "encoder.embedding.word_embedding.weight" not in model_state:
+                # Hack to save space when saving the model, more clever though would be save the right one in the first place
+                model_state["encoder.embedding.word_embedding.weight"] = model_state["decoder.weight"]
+            try:
+                sanitized_state = {}
+                for k, v in model_state.items():
+                    if k.startswith("module."):
+                        k = k[7:]
+                    if self.cfg_impl.compile_torch:
+                        k = f"_orig_mod.{k}"
+                    if torch.distributed.is_initialized():
+                        k = f"module.{k}"
+                    sanitized_state[k] = v
+                self.model.load_state_dict(sanitized_state, strict=True)
+            except RuntimeError as e:
+                log.info(f"State dict difference is {str(e).split('Error(s) in loading state_dict for')[1]}... Ok?")
+                self.model.load_state_dict(sanitized_state, strict=False)
+            self.model.to(**self.setup)
 
-    def save_training_checkpoint(self, identifier, directory="checkpoints", state=None):
+    def save_training_checkpoint(self, identifier="intermediate.pth", directory="", metadata=None):
         """Path, identifier and additional client state. This checkpoint can be used to resume training.
         The default behavior is to save this checkpoint relative to the training working directory.
-        """
-        try:
-            identifier_str = f"{identifier:2.4f}"
-        except ValueError:
-            identifier_str = str(identifier)
-        file = os.path.join(directory, f"{identifier:2.4f}.safetensors")
-        os.makedirs(path, exist_ok=True)
 
-        optim_state = self.optimizer.state_dict()
-        model_state = self.retrieve_model_state_dict()
-        scheduler_state = self.scheduler.state_dict()
-        save_file([optim_state, model_state, scheduler_state, state], file)
+        Has to be .pth because safetensors are annoying to dump a bunch of optim states, scales and schedules
+        """
+        file = os.path.join(directory, str(identifier))
+        if directory != "":
+            os.makedirs(directory, exist_ok=True)
+
+        save_state = dict()
+        save_state["optim"] = self.optimizer.state_dict()
+        save_state["model"] = self.model.state_dict()  # this is the raw key containing _orig and _module flags
+        save_state["scheduler"] = self.scheduler.state_dict()
+        save_state["scaler"] = self.scaler.state_dict()
+        save_state["metadata"] = metadata
+        torch.save(save_state, file)
+
+    def load_training_checkpoint(self, identifier="intermediate.pth", directory=""):
+        self.optimizer.zero_grad()
+        file = os.path.join(directory, str(identifier))
+
+        save_state = torch.load(file, map_location=torch.device("cpu"))
+        self.model.load_state_dict(save_state["model"])  # why does this end up on GPU?
+        self.optimizer.load_state_dict(save_state["optim"])
+        self.scheduler.load_state_dict(save_state["scheduler"])
+        self.scaler.load_state_dict(save_state["scaler"])
+        log.info(f"Sucessfully loaded state with metadata {save_state['metadata']}")
+        return save_state["metadata"]
 
     def save_final_model(self, base_directory, identifier, tokenizer, cfg_arch, dryrun=False):
         """This checkpoint can be used for downstream tasks.
@@ -521,18 +523,7 @@ class TorchEngineFull(TorchEngineMinimal):
                 param.mul_(scale)
 
 
-class _ModelArgWrapper(torch.nn.Module):
-    """Wrap arguments."""
-
-    def __init__(self, model):
-        super().__init__()
-        self.model = model
-
-    def forward(self, input_ids, labels):
-        return self.model(input_ids=input_ids, labels=labels)
-
-
-def _load_optimizer(model, cfg_train, cfg_impl):
+def _load_optimizer(model, cfg_train, cfg_impl, initial_time):
 
     # Filter some parameters
     grouped_parameters = group_parameters(model, cfg_train)
@@ -601,6 +592,6 @@ def _load_optimizer(model, cfg_train, cfg_impl):
 
         optimizer_to_schedule = optimizer.optim
 
-    scheduler = get_schedule_fn(cfg_train)(optimizer_to_schedule)
+    scheduler = get_schedule_fn(initial_time, cfg_train)(optimizer_to_schedule)
 
     return optimizer, scheduler
