@@ -11,6 +11,7 @@ def construct_huggingface_model(cfg_arch, vocab_size, downstream_classes=None):
             configuration = cfg_arch
         else:
             configuration = transformers.BertConfig(**cfg_arch)
+        configuration.pad_token_id = None  # Need to drop this during pretraining, otherwise leads to a graph break in a HF warning
         configuration.vocab_size = vocab_size
         model = transformers.AutoModelForMaskedLM.from_config(configuration)
         model.vocab_size = model.config.vocab_size
