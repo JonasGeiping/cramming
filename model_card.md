@@ -1,3 +1,20 @@
+---
+license: openrail
+datasets:
+- EleutherAI/pile
+language:
+- en
+metrics:
+- glue
+pipeline_tag: fill-mask
+tags:
+- cramming
+- bert
+- NLU
+---
+
+
+
 # crammed BERT
 
 This is one of the final models described in "Cramming: Training a Language Model on a Single GPU in One Day". This is an *English*-language model pretrained like BERT, but with less compute. This one was trained for 24 hours on a single A6000 GPU. To use this model, you need the code from the repo at https://github.com/JonasGeiping/cramming.
@@ -21,7 +38,7 @@ import cramming
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 tokenizer = AutoTokenizer.from_pretrained("JonasGeiping/crammed-bert")
-model  = AutoModelForMaskedLM.from_pretrained("JonasGeiping/test-crammedBERT-c5")
+model  = AutoModelForMaskedLM.from_pretrained("JonasGeiping/crammed-bert")
 
 text = "Replace me by any text you'd like."
 encoded_input = tokenizer(text, return_tensors='pt')
@@ -31,7 +48,7 @@ output = model(**encoded_input)
 
 ### Limitations and bias
 
-The training data used for this model was further filtered and sorted beyond the normal C4 (not that normal C4 is particularly high quality). These modifications were not tested for unintended consequences.
+The training data used for this model was further filtered and sorted beyond the normal Pile. These modifications were not tested for unintended consequences.
 
 ## Training data, Training procedure, Preprocessing, Pretraining
 
@@ -48,9 +65,10 @@ Glue test results:
 
 | Task | MNLI-(m/mm) | QQP  | QNLI | SST-2 | CoLA | STS-B | MRPC | RTE  | Average |
 |:----:|:-----------:|:----:|:----:|:-----:|:----:|:-----:|:----:|:----:|:-------:|
-|      | 83.9/84.1  | 87.3  | 89.5 | 92.2  | 44.5 | 84.6  | 87.5  | 53.8| 78.6   |
+|      | 84.1/84.6  | 87.5  | 90.2 | 92.0  | 53.3 | 87.4  | 88.9  | 58.5| 80.7   |
 
-This numbers are median over 5 trials on "GLUE-sane" using the GLUE-dev set. With this variant of GLUE, finetuning cannot be longer than 5 epochs on each task, and hyperparameters have to be chosen equal for all tasks.
+These numbers are the median over 5 trials on "GLUE-sane" using the GLUE-dev set. With this variant of GLUE, finetuning cannot be longer than 5 epochs on each task, and hyperparameters have to be chosen equal for all tasks.
+The numbers are also slightly higher than in the paper, this is the best pretraining checkpoint of the the 5 training runs, whereas the paper has the median pretraining checkpoint.
 
 ### BibTeX entry and citation info
 
