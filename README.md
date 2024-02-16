@@ -132,11 +132,11 @@ torchrun --nproc_per_node=4 --standalone pretrain.py name=bert4gpu  data=bookcor
 
 Eval a huggingface checkpoint (in this example on RTE):
 ```
-python eval.py eval=GLUE_sane eval/task=rte name=bert-finetuning eval.checkpoint=hf://bert-base-uncased impl.shuffle_in_dataloader=True impl.compile_torch=False
+python eval.py eval=GLUE_sane eval/tasks=rte name=bert-finetuning eval.checkpoint=hf://bert-base-uncased impl.shuffle_in_dataloader=True impl.compile_torch=False impl.microbatch_size=16
 ```
 Eval a local checkpoint (disable compilation, which expect fixed shapes right now):
 ```
-python eval.py eval=GLUE_sane eval/task=rte name=NAME_OF_PRETRAINING_RUN eval.checkpoint=latest impl.shuffle_in_dataloader=True impl.compile_torch=False
+python eval.py eval=GLUE_sane eval/tasks=rte name=NAME_OF_PRETRAINING_RUN eval.checkpoint=latest impl.shuffle_in_dataloader=True impl.compile_torch=False
 ```
 
 Sanity check for distributed code on CPU:
