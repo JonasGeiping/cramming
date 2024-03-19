@@ -19,6 +19,8 @@ def construct_huggingface_model(cfg_arch, vocab_size, downstream_classes=None):
         if isinstance(cfg_arch, transformers.PretrainedConfig):
             configuration = cfg_arch
             configuration.num_labels = downstream_classes
+            if hasattr(configuration, "arch"):
+                configuration.arch["num_labels"] = downstream_classes
         else:
             configuration = OmegaConf.to_container(cfg_arch)
             configuration = transformers.BertConfig(**configuration, num_labels=downstream_classes)

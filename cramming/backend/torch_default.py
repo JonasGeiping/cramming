@@ -234,7 +234,7 @@ class TorchEngineMinimal(torch.nn.Module):
             else:
                 self.model = self.model.from_pretrained(file.split("hf://")[1], config=cfg_arch).to(**self.setup)
                 # reinit optimizer:
-                self.optimizer, self.scheduler = _load_optimizer(self.model, self.cfg_train, self.cfg_impl)
+                self.optimizer, self.scheduler = _load_optimizer(self.model, self.cfg_train, self.cfg_impl, self.initial_time)
         else:
             model_state = load_file(file, device=str(self.setup["device"]))
             # This loader includes a few legacy options:
