@@ -93,6 +93,9 @@ def system_startup(cfg):
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True  # Should be true anyway
+    else:
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
 
     multiprocess.set_start_method("forkserver")
     if cfg.impl.local_staging_dir is not None:

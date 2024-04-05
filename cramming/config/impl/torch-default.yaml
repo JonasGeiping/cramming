@@ -20,20 +20,20 @@ foreach_optimizer: False
 
 # Compilation
 compile_torch: True
-mode: # overwritten by manual selection of inductor variables below
+mode: # can be overwritten by manual selection of inductor variables below # accuracy issues with max-autotune
 dynamic: False # this is a world of pain (when I last tested it, around torch2.0 release)
 fullgraph: True # why even compile when not compile everywhere :>
 backend: inductor # use eager here when using the old bert-cX models
 _inductor_vars:
-  # max_autotune_gemm: True
-  # max_autotune_pointwise: False # was better in some tests not to enable this?
+  max_autotune_gemm: True
+  max_autotune_pointwise: False # was better in some tests not to enable this?
   triton:
     cudagraphs: True
-    # cudagraph_trees: False # not working with multiprocessing on May19th nightly
+    cudagraph_trees: False # not working with multiprocessing on May19th nightly
   # epilogue_fusion: True # true by default in latest nightly
   # aggressive_fusion: False # oom on latest nightly
   permute_fusion: True # nice
-  shape_padding: True # flaky on the new nightly?
+  shape_padding: True #
   # optional to mess with the internal inductor config. Maybe not advisable
   # - `epilogue_fusion` which fuses pointwise ops into templates. Requires `max_autotune` to also be set
   # - `max_autotune` which will profile to pick the best matmul configuration
