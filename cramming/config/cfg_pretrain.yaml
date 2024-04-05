@@ -5,7 +5,7 @@ defaults:
   - arch: hf-bert-tiny
   - data: sanity-check-2
   - impl: torch-default
-  - wandb: none
+  - wandb: default
   - train: bert-base
   - _self_
   - override hydra/job_logging: custom
