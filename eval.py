@@ -41,7 +41,7 @@ def main_downstream_process(cfg, setup):
             targets = [evaluate.load(metric_name, cache_dir=cfg.impl.path) for metric_name in task["details"]["target_metrics"]]
             metric = evaluate.CombinedEvaluations(targets)
         # Launch training
-        model_engine.train()
+        model_engine.train(cfg.eval.eval_in_train_mode)
         loss_vals = []
         for epoch in range(cfg.eval.epochs):
             train_time = time.time()
@@ -136,7 +136,7 @@ def validate(model_engine, validloader, metric, setup, cfg):
     except ValueError:  # pearson corr computation will raise errors if metric values are NaN
         log.info("Value Error in metrics computation, maybe non-finite values in prediction. Returning backup score.")
         eval_metric = metric.compute(predictions=[0, 1], references=[1, 0])  # spoof terrible result if metric computation fails
-    model_engine.train()
+    model_engine.train(cfg.eval.eval_in_train_mode)
     return {k: float(v) for k, v in eval_metric.items()}  # force float returns
 
 

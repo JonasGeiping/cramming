@@ -26,6 +26,7 @@ limited_decay_keys: [bias, LayerNorm.bias, LayerNorm.weight, norm]
 scheduler: cosine-decay
 optim_mod:
   name: none
+eval_in_train_mode: True # Turn on dropout (if existing in the model) during finetuning
 
 epochs: 5
 

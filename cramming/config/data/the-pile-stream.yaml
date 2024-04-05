@@ -19,8 +19,8 @@ seq_length: 128
 include_cls_token_in_corpus: False
 include_sep_token_in_corpus: True
 use_type_ids: False
-max_entries_in_raw_dataset: 8e6 # Select only this many examples from the dataset # 20e6 are ok if all are chosen. Oversample if filtering
-max_seq_in_tokenized_dataset: 85e6 # Select only this many tokenized sequences.
+max_entries_in_raw_dataset: 48e6 # Select only this many examples from the dataset # 20e6 are ok if all are chosen. Oversample if filtering
+max_seq_in_tokenized_dataset: 1e14 # Select only this many tokenized sequence (or less)
 # max_seq_in_tokenized_dataset should be just slightly more than budget * 60 * 60 * expected tokens/sec for the single epoch of training
 
 # Data Cleaning:

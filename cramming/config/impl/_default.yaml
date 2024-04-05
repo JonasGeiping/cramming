@@ -12,18 +12,18 @@ path: data
 
 # data implementation:
 local_staging_dir: # Optionally copy a preprocessed dataset into this folder before loading it for training
-forbid_dataset_preprocessing: False
+forbid_dataset_preprocessing: True
 temporary_corpus: False # Save data directly into local staging dir, forget after use
 max_raw_chunk_size: 8e6
 
 # checkpointing and logging:
 print_loss_every_nth_step: 1000
 save_intermediate_checkpoints: False
-save_every_nth_step: 5000
-resume_run_after_preempt: True
+save_every_nth_step: 10000
+resume_run_after_preempt: False
 
 # checkpoint troubleshooting (should only be relevant for >100bil token runs)
-troubleshoot_strategy: recover_checkpoint # can include "recovery_checkpoint" and "dump_nan_grads"
+troubleshoot_strategy: "none" # recover_checkpoint # can include "recovery_checkpoint" and "dump_nan_grads"
 
 # early termination, cancel runs that do not meet this loss threshold early.
 early_termination:
