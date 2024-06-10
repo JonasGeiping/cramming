@@ -13,6 +13,15 @@ import cramming
 
 log = logging.getLogger(__name__)
 
+# Add deterministic seeds for reproducibility
+import random
+import numpy as np
+
+np.random.seed(0)
+torch.manual_seed(0)
+random.seed(0)
+torch.use_deterministic_algorithms(True)
+
 
 def main_training_process(cfg, setup):
     """This function controls the central training loop."""
@@ -51,6 +60,9 @@ def main_training_process(cfg, setup):
         device_batch = model_engine.to_device(batch)
         loss = model_engine.step(device_batch)
         loss_vals.append(loss.detach())
+        
+        if step % 10 == 0:
+            print(f"step:{step}, loss:{loss}")
 
         # Check stopping criteria
         if check_deadline(wallclock_timer, cfg.budget) or step == cfg.train.steps:
