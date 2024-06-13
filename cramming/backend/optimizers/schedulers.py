@@ -1,4 +1,5 @@
 """Misc. optimizer implementations."""
+
 import transformers
 import math
 
@@ -181,6 +182,13 @@ def get_schedule_fn(initial_time, cfg_train):
             falloff=0.25,
             base_percentage=0.25,
             initial_time=initial_time,
+        )
+    elif cfg_train.scheduler == "triangle2":
+        scheduler_fn = partial(
+            get_triangle,
+            num_training_steps=cfg_train.steps,
+            falloff=0.25,
+            base_percentage=0.25,
         )
     elif cfg_train.scheduler in [
         "linear",
@@ -491,5 +499,20 @@ def get_budget_polynomial_decay_with_warmup(optimizer, hour_budget, num_warmup_s
             pct_remaining = 1 - (current_step - num_warmup_steps) / decay_steps
             decay = lr_range * pct_remaining**power + lr_end
             return decay / lr_init  # as LambdaLR multiplies by lr_init
+
+    return LambdaLR(optimizer, lr_lambda, -1)
+
+
+def get_triangle(optimizer, num_training_steps, base_percentage=0.5, falloff=0.5):
+    """Linear increase from a percentage of the base learning rate, then linear decay.
+
+    plot min(0.5 + x * (1 - 0.5)/(1-0.25) / 1000, 1/0.25 - x / (1000 * 0.25)) from 0 to 1000 in the plot range 0 to 1
+    """
+
+    def lr_lambda(current_step):
+        return min(
+            base_percentage + current_step * (1 - base_percentage) / (1 - falloff) / num_training_steps,
+            float(1 / falloff - current_step / (num_training_steps * falloff)),
+        )
 
     return LambdaLR(optimizer, lr_lambda, -1)

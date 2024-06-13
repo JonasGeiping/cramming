@@ -12,7 +12,7 @@ path: data
 
 # data implementation:
 local_staging_dir: # Optionally copy a preprocessed dataset into this folder before loading it for training
-forbid_dataset_preprocessing: True
+forbid_dataset_preprocessing: False
 temporary_corpus: False # Save data directly into local staging dir, forget after use
 max_raw_chunk_size: 8e6
 

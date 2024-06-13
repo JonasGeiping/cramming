@@ -7,6 +7,7 @@ There are two versions here, the TorchEngineMinimal, which is the default, and T
 that were tested but ultimately discarded, so read that part only if you're interested.
 
 """
+
 import torch
 import torch._inductor.utils
 
@@ -23,7 +24,6 @@ import transformers
 from safetensors.torch import load_file, save_file
 from transformers.utils.generic import working_or_temp_dir
 
-from torch.distributed.optim import ZeroRedundancyOptimizer
 
 from .utils import group_parameters, prepare_pretraining_dataloader, update_ema, updated_latest_weight_average
 from .optimizers.schedulers import get_schedule_fn
@@ -565,17 +565,7 @@ def _load_optimizer(model, cfg_train, cfg_impl, initial_time):
     if cfg_impl.foreach_optimizer and cfg_train.optim.type != "Shampoo":
         optimizer_args["foreach"] = True
 
-    if torch.distributed.is_initialized() and cfg_impl.zero_redundancy_optimizer:
-        # The overlap option is a whole bucket of problems in itself for now...
-        optimizer = ZeroRedundancyOptimizer(
-            grouped_parameters,
-            optimizer_class=optimizer_class,
-            parameters_as_bucket_view=True,
-            overlap_with_ddp=False,
-            **optimizer_args,
-        )
-    else:
-        optimizer = optimizer_class(grouped_parameters, **optimizer_args)
+    optimizer = optimizer_class(grouped_parameters, **optimizer_args)
 
     if cfg_train.optim_mod.name == "none":
         optimizer_to_schedule = optimizer
